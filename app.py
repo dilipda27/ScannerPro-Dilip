@@ -4,7 +4,7 @@ import scanner
 st.set_page_config(page_title="NSE Stock Scanner Dashboard", layout="wide")
 
 st.title("📈 NSE Stock Scanner")
-st.markdown("Scan Nifty 200 stocks for actionable trading setups based on technical indicators.")
+st.markdown("Scan Nifty 500 (F&O) stocks for actionable trading setups based on technical indicators.")
 
 st.sidebar.header("Scanner Settings")
 strategy = st.sidebar.selectbox(
@@ -17,8 +17,8 @@ st.sidebar.info("This scanner evaluates the latest daily data from Yahoo Finance
 
 # Allow users to run scan
 if st.button(f"Run Scan: {strategy}", type="primary"):
-    with st.spinner(f"Fetching Nifty 200 components and running {strategy} scan... This may take a minute or two."):
-        tickers = scanner.get_nifty200_tickers()
+    with st.spinner(f"Fetching Nifty 500 F&O components and running {strategy} scan... This may take a minute or two."):
+        tickers = scanner.get_nifty500_fno_tickers()
         
         # Adding a progress bar to show scanning progress
         progress_bar = st.progress(0)

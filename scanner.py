@@ -4,21 +4,41 @@ import pandas_ta as ta
 import requests
 import io
 
-def get_nifty200_tickers():
+def get_nifty500_fno_tickers():
     """
-    Fetch the latest Nifty 200 constituents from NSE India.
+    Fetch Nifty 500 stocks and filter for those in the FNO segment.
     """
-    url = "https://archives.nseindia.com/content/indices/ind_nifty200list.csv"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    
+    # 1. Fetch Nifty 500
+    url_500 = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        df = pd.read_csv(io.StringIO(response.text))
-        tickers = [f"{symbol}.NS" for symbol in df['Symbol'].tolist()]
-        return tickers
+        r_500 = requests.get(url_500, headers=headers, timeout=10)
+        df_500 = pd.read_csv(io.StringIO(r_500.text))
+        nifty500_symbols = set(df_500['Symbol'].str.strip())
     except Exception as e:
-        print(f"Error fetching Nifty 200 list: {e}")
+        print(f"Error fetching Nifty 500: {e}")
         return ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS"]
+        
+    # 2. Fetch FNO List
+    url_fno = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
+    fno_symbols = set()
+    try:
+        r_fno = requests.get(url_fno, headers=headers, timeout=10)
+        for line in r_fno.text.split('\n'):
+            parts = line.split(',')
+            if len(parts) > 2:
+                sym = parts[1].strip()
+                if sym and sym != "SYMBOL":
+                    fno_symbols.add(sym)
+    except Exception as e:
+        print(f"Error fetching FNO list: {e}")
+        fno_symbols = nifty500_symbols # Fallback to all Nifty 500
+        
+    # Intersection
+    final_symbols = nifty500_symbols.intersection(fno_symbols)
+    tickers = [f"{sym}.NS" for sym in final_symbols]
+    return sorted(tickers)
 
 def fetch_data(ticker, period="1y"):
     """
@@ -65,17 +85,19 @@ def scan_swing_candidates(tickers):
                 prev_row = df.iloc[-2]
                 
                 in_uptrend = last_row['Close'] > last_row['SMA_50'] and last_row['Close'] > last_row['SMA_200']
-                pullback_setup = in_uptrend and last_row['RSI_14'] < 50
+                bullish_reversal = last_row['Close'] > prev_row['High']
+                
+                pullback_setup = in_uptrend and last_row['RSI_14'] < 50 and bullish_reversal
                 
                 macd_crossover = (prev_row['MACD_12_26_9'] < prev_row['MACDs_12_26_9']) and \
                                  (last_row['MACD_12_26_9'] > last_row['MACDs_12_26_9'])
                 vol_breakout = last_row['Volume'] > last_row['Vol_SMA_20']
-                momentum_setup = in_uptrend and macd_crossover and vol_breakout
+                momentum_setup = in_uptrend and macd_crossover and vol_breakout and bullish_reversal
                 
                 if pullback_setup or momentum_setup:
                     reason = []
-                    if pullback_setup: reason.append("Uptrend Pullback (RSI < 50)")
-                    if momentum_setup: reason.append("MACD Breakout (with Volume)")
+                    if pullback_setup: reason.append("Uptrend Pullback & Bullish Reversal")
+                    if momentum_setup: reason.append("MACD Breakout & Bullish Reversal")
                     
                     results.append({
                         "Ticker": ticker,
