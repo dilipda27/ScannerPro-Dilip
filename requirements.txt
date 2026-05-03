@@ -2,3 +2,8 @@ yfinance
 pandas
 pandas-ta
 streamlit
+kiteconnect
+google-genai
+tabulate
+Pillow
+schedule

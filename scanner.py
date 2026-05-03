@@ -84,6 +84,10 @@ def scan_swing_candidates(tickers):
                 last_row = df.iloc[-1]
                 prev_row = df.iloc[-2]
                 
+                # Price Filter: Avoid penny stocks or illiquid heavyweights
+                if not (100 <= last_row['Close'] <= 5000):
+                    continue
+                
                 in_uptrend = last_row['Close'] > last_row['SMA_50'] and last_row['Close'] > last_row['SMA_200']
                 bullish_reversal = last_row['Close'] > prev_row['High']
                 
@@ -99,9 +103,13 @@ def scan_swing_candidates(tickers):
                     if pullback_setup: reason.append("Uptrend Pullback & Bullish Reversal")
                     if momentum_setup: reason.append("MACD Breakout & Bullish Reversal")
                     
+                    # Calculate % Gain
+                    pct_gain = ((last_row['Close'] - prev_row['Close']) / prev_row['Close']) * 100
+                    
                     results.append({
                         "Ticker": ticker,
                         "Close": round(last_row['Close'], 2),
+                        "% Gain": round(pct_gain, 2),
                         "RSI": round(last_row['RSI_14'], 2),
                         "Volume": last_row['Volume'],
                         "Reason": " & ".join(reason)
@@ -123,13 +131,21 @@ def scan_breakout_stocks(tickers):
                 last_row = df.iloc[-1]
                 prev_row = df.iloc[-2]
                 
+                # Price Filter: Avoid penny stocks or illiquid heavyweights
+                if not (100 <= last_row['Close'] <= 5000):
+                    continue
+                
                 price_breakout = last_row['Close'] > prev_row['High_20']
                 vol_breakout = last_row['Volume'] > (1.5 * last_row['Vol_SMA_20'])
                 
                 if price_breakout and vol_breakout:
+                    # Calculate % Gain
+                    pct_gain = ((last_row['Close'] - prev_row['Close']) / prev_row['Close']) * 100
+                    
                     results.append({
                         "Ticker": ticker,
                         "Close": round(last_row['Close'], 2),
+                        "% Gain": round(pct_gain, 2),
                         "RSI": round(last_row['RSI_14'], 2) if 'RSI_14' in df.columns else None,
                         "Volume": last_row['Volume'],
                         "Reason": "20-Day High Breakout"

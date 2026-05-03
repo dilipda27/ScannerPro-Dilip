@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+.venv
+venv/
+.streamlit/
+.kite_session.json
+paper_portfolio.csv
+scheduler.log
+generated_infographic.jpg
+test.csv
+*.log
