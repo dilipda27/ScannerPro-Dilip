@@ -1,12 +1,19 @@
 __pycache__/
+config.py
 *.pyc
 .env
 .venv
 venv/
 .streamlit/
 .kite_session.json
-paper_portfolio.csv
-scheduler.log
-generated_infographic.jpg
-test.csv
+# Data and Caches
+*.csv
+*.db
+*.json
+!sector_map.json
+!instrument_token_cache.json
+
+# Logs and Temp
 *.log
+generated_infographic.jpg
+scratch/

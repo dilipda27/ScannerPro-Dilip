@@ -69,10 +69,16 @@ def calculate_indicators(df):
     
     return df
 
-def scan_swing_candidates(tickers):
+def scan_swing_candidates(tickers, progress_callback=None):
     results = []
+    total = len(tickers)
+    processed = 0
     
     for ticker in tickers:
+        processed += 1
+        if progress_callback:
+            progress_callback(processed, total, ticker)
+        
         if ticker == "VEDL.NS":
             continue
             
@@ -116,10 +122,16 @@ def scan_swing_candidates(tickers):
                     })
     return pd.DataFrame(results)
 
-def scan_breakout_stocks(tickers):
+def scan_breakout_stocks(tickers, progress_callback=None):
     results = []
+    total = len(tickers)
+    processed = 0
     
     for ticker in tickers:
+        processed += 1
+        if progress_callback:
+            progress_callback(processed, total, ticker)
+        
         if ticker == "VEDL.NS":
             continue
             

@@ -65,18 +65,29 @@ def send_dataframe(df: pd.DataFrame, bot_token: str, chat_id: str, scan_name: st
     
     for _, row in df.iterrows():
         # Detect price column (LTP for Kite, Close for YFinance)
-        price = row.get('LTP', row.get('Close', 'N/A'))
+        price = row.get('LTP', row.get('Close', row.get('Breakout Price', 'N/A')))
         gain = row.get('% Gain', 'N/A')
         rsi = row.get('RSI (Daily)', row.get('RSI', 'N/A'))
-        vol_spike = row.get('Volume Spike Ratio', 'N/A')
-        target = row.get('Target', 'N/A')
-        sl = row.get('Stop Loss', 'N/A')
+        vol_spike = row.get('Vol Spike', row.get('Volume Spike Ratio', 'N/A'))
+        
+        # Priority for SL and Target (Paper versions first)
+        target = row.get('Paper Target', row.get('Target', 'N/A'))
+        sl = row.get('Paper SL', row.get('Stop Loss', 'N/A'))
+        
+        # Trade Type Marker
+        trade_type = ""
+        breakout = str(row.get('Breakout', ''))
+        if "Bullish" in breakout:
+            trade_type = "🟩 *LONG TRADE*\n"
+        elif "Bearish" in breakout:
+            trade_type = "🟥 *SHORT TRADE*\n"
         
         message += f"▪️ *{row['Ticker']}*\n"
+        message += trade_type
         message += f"Price: ₹{price} | Gain: {gain}%\n"
         
         if rsi != 'N/A' or vol_spike != 'N/A':
-            message += f"RSI: {rsi} | Vol Spike: {vol_spike}x\n"
+            message += f"RSI: {rsi} | Vol: {vol_spike}x\n"
             
         if target != 'N/A' or sl != 'N/A':
             message += f"Target: ₹{target} | SL: ₹{sl}\n"
@@ -84,3 +95,34 @@ def send_dataframe(df: pd.DataFrame, bot_token: str, chat_id: str, scan_name: st
         message += "\n"
         
     return send_message(message, bot_token, chat_id, parse_mode="Markdown")
+
+def send_portfolio_report(portfolio_df: pd.DataFrame, bot_token: str, chat_id: str):
+    """
+    Sends a summary of the current active portfolio to Telegram.
+    """
+    if portfolio_df.empty:
+        return # Don't bother if empty
+        
+    active_df = portfolio_df[portfolio_df['Status'] == 'Active'].copy()
+    if active_df.empty:
+        return
+        
+    total_pnl = active_df['Live P&L'].sum()
+    total_capital = (active_df['EntryPrice'] * active_df['Qty']).sum()
+    total_roi = (total_pnl / total_capital * 100) if total_capital > 0 else 0
+    
+    header = "📊 *Current Portfolio Summary*\n"
+    header += f"Total P&L: *₹{total_pnl:,.2f}* ({total_roi:.2f}%)\n"
+    header += f"Active Positions: {len(active_df)}\n\n"
+    
+    message = header
+    for _, row in active_df.iterrows():
+        pnl = row['Live P&L']
+        pnl_pct = (pnl / (row['EntryPrice'] * row['Qty']) * 100) if row['EntryPrice'] > 0 else 0
+        icon = "🟢" if pnl >= 0 else "🔴"
+        
+        message += f"{icon} *{row['Ticker']}*: ₹{pnl:,.2f} ({pnl_pct:.2f}%)\n"
+        message += f"   LTP: ₹{row['Current Price']} | Entry: ₹{row['EntryPrice']}\n"
+    
+    return send_message(message, bot_token, chat_id, parse_mode="Markdown")
+

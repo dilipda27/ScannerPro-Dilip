@@ -1,52 +1,126 @@
-from google import genai
+import time
+import requests
+import json
 import pandas as pd
 import logging
 
-def analyze_stocks(df, gemini_api_key):
+def analyze_stocks(df, gemini_api_key, strategy_name="Swing"):
     """
     Sends the shortlisted stocks DataFrame to Gemini AI for conviction analysis.
+    Uses direct REST API calls to bypass SDK versioning issues.
     """
     if df.empty:
         return "No stocks to analyze."
         
-    try:
-        # Initialize the new SDK client
-        client = genai.Client(api_key=gemini_api_key)
-        
-        # Format dataframe to string representation
-        data_str = df.to_markdown(index=False)
-        
+    # Format dataframe to string representation
+    data_str = df.to_markdown(index=False)
+    
+    if "Bearish" in strategy_name:
         prompt = f"""
-You are an expert quantitative swing trader. I have run my automated scanner on the Nifty 500 universe exactly at 3:15 PM IST.
-The scanner applies the following filters:
-1. Trend: Last Traded Price (LTP) is above the 50-day and 200-day EMA.
-2. Momentum: 14-period Daily RSI is between 60 and 80.
-3. Volume Anomaly: Today's volume is > 1.5x the 20-day average.
-4. Closing Conviction: The LTP is within 2% of the day's High.
+You are an expert quantitative intraday short-seller. I have run my automated scanner for Bearish Breakdowns.
+The scanner identifies stocks that are structurally weak (Price < 50 EMA, RSI < 45), have opened with a gap down, are trading below VWAP, and are in the lower 25% of their opening range.
 
 Here are the stocks that passed the scan today, along with their technical metrics:
 
 {data_str}
 
-Analyze these shortlisted stocks purely based on the provided technical metrics (Volume Spike Ratio, % Gain, RSI). 
+Analyze these shortlisted stocks purely based on the provided technical metrics. 
+I want you to pick the TOP 3 highest conviction SHORT trade setups from this list for an intraday breakdown trade.
+
+Provide your response in this format:
+### Top Short Candidate 1: [Ticker]
+**Rationale:** (Brief explanation of why the combination of technical metrics - especially the Gap, VWAP position, and RSI - makes this the strongest short setup).
+
+### Top Short Candidate 2: [Ticker]
+**Rationale:** ...
+
+### Top Short Candidate 3: [Ticker]
+**Rationale:** ...
+
+Keep your analysis concise, professional, and actionable. Do not provide general trading disclaimers, just the analysis.
+"""
+    else:
+        prompt = f"""
+You are an expert quantitative swing trader. I have run my automated scanner on the Nifty 500 universe.
+The scanner filters for stocks with strong trend alignment, positive momentum (RSI), and significant volume breakout.
+
+Here are the stocks that passed the scan today, along with their technical metrics:
+
+{data_str}
+
+Analyze these shortlisted stocks purely based on the provided technical metrics. 
 I want you to pick the TOP 1 or 2 highest conviction trade setups from this list for an 8-10 day swing trade.
 
 Provide your response in this format:
 ### Top Conviction Pick 1: [Ticker]
-**Rationale:** (Brief explanation of why the combination of % Gain, Volume Spike, and RSI makes this the strongest setup).
+**Rationale:** (Brief explanation of why the combination of technical metrics makes this the strongest setup).
 
 ### Top Conviction Pick 2: [Ticker] (Optional)
 **Rationale:** ...
 
 Keep your analysis concise, professional, and actionable. Do not provide general trading disclaimers, just the analysis.
 """
-        # Call the new endpoint using the latest recommended fast model
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
-        )
-        return response.text
+
+
+    # Using only verified models provided by the user
+    max_retries = 5
+    models_to_try = [
+        'gemini-2.0-flash',
+        'gemini-pro-latest',
+        'gemini-flash-latest',
+        'gemini-2.0-flash-lite',
+        'gemini-2.5-flash',
+        'gemini-2.5-pro',
+        'gemini-3-pro-preview'
+    ]
+    
+    last_error = "None"
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={gemini_api_key}"
         
-    except Exception as e:
-        logging.error(f"Error generating AI analysis: {e}")
-        return f"Failed to generate AI analysis. Please ensure your Gemini API key is valid. Error: {e}"
+        for attempt in range(max_retries):
+            try:
+                payload = {
+                    "contents": [{
+                        "parts": [{"text": prompt}]
+                    }]
+                }
+                headers = {'Content-Type': 'application/json'}
+                
+                response = requests.post(url, headers=headers, data=json.dumps(payload))
+                res_data = response.json()
+                
+                if response.status_code == 200:
+                    return res_data['candidates'][0]['content']['parts'][0]['text']
+                else:
+                    last_error = res_data.get('error', {}).get('message', response.text)
+                    
+                    # If model not found (404), try next model
+                    if response.status_code == 404:
+                        logging.warning(f"Model {model_name} not found. Trying next...")
+                        break
+                        
+                    # Handle rate limits (429) or temporary errors (503)
+                    if response.status_code in [429, 503, 500]:
+                        # If quota is hit (429), try breaking to next model
+                        if response.status_code == 429:
+                            logging.warning(f"Quota exceeded for {model_name}. Trying next model...")
+                            break 
+                            
+                        if attempt < max_retries - 1:
+                            wait_time = (attempt + 1) * 5
+                            logging.warning(f"Gemini API busy ({response.status_code}). Retrying in {wait_time}s...")
+                            time.sleep(wait_time)
+                            continue
+                    
+                    # For other errors, just report it
+                    return f"The AI analysis service is temporarily busy. (Status: {response.status_code}, Error: {last_error})"
+
+            except Exception as e:
+                last_error = str(e)
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                return f"Error connecting to AI service: {e}"
+                
+    return f"Error: All AI models are currently unavailable. Last Error: {last_error}"
