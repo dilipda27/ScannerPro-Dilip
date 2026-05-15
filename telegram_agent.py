@@ -1,6 +1,9 @@
 import requests
 import logging
 import pandas as pd
+import chart_helper
+import os
+import datetime
 
 def send_message(text: str, bot_token: str, chat_id: str, parse_mode: str = None):
     """
@@ -126,3 +129,63 @@ def send_portfolio_report(portfolio_df: pd.DataFrame, bot_token: str, chat_id: s
     
     return send_message(message, bot_token, chat_id, parse_mode="Markdown")
 
+
+def format_signal_message(row, scan_name):
+    """
+    Formats a single row of scan result into a nice Markdown message.
+    """
+    ticker = row['Ticker']
+    price = row.get('LTP', row.get('Close', row.get('Entry Price', row.get('Breakout Price', 'N/A'))))
+    gain = row.get('% Gain', 'N/A')
+    rsi = row.get('RSI (Daily)', row.get('RSI', 'N/A'))
+    vol_spike = row.get('Vol Spike', row.get('Volume Spike Ratio', 'N/A'))
+    target = row.get('Paper Target', row.get('Target', 'N/A'))
+    sl = row.get('Paper SL', row.get('Stop Loss', 'N/A'))
+    
+    trade_type = ""
+    breakout = str(row.get('Breakout', ''))
+    if "Bullish" in breakout or "Bullish" in scan_name:
+        trade_type = "🟩 *LONG ENTRY TRIGGERED*\n"
+    elif "Bearish" in breakout or "Bearish" in scan_name:
+        trade_type = "🟥 *SHORT ENTRY TRIGGERED*\n"
+        
+    msg = f"🚀 *{scan_name} Signal*\n"
+    msg += f"🔥 *{ticker}*\n"
+    msg += trade_type
+    msg += f"Entry: ₹{price}\n"
+    if gain != 'N/A': msg += f"Day Gain: {gain}%\n"
+    if target != 'N/A': msg += f"Target: ₹{target} | SL: ₹{sl}\n"
+    if vol_spike != 'N/A': msg += f"Volume Spike: {vol_spike}x\n"
+    
+    # Add direct link to Kite chart for professional utility
+    token = row.get('Token')
+    if token:
+        msg += f"📈 [Open Full Chart](https://kite.zerodha.com/markets/ext/chart/web/ciq/NSE/{ticker}/{int(token)})\n"
+    
+    msg += f"\n_Generated at {datetime.datetime.now().strftime('%H:%M')}_"
+    return msg
+
+def send_signal_with_chart(ticker: str, message: str, df_5m: pd.DataFrame, bot_token: str, chat_id: str, scan_name: str):
+    """
+    Generates a chart from 5m data (resampled to 15m) and sends it with the signal message.
+    """
+    chart_path = f"chart_{ticker}.png"
+    try:
+        # Resample to 15m as requested by user
+        df_15m = chart_helper.resample_to_15m(df_5m)
+        
+        # Generate chart
+        generated_path = chart_helper.generate_intraday_chart(df_15m, ticker, scan_name, output_path=chart_path)
+        
+        if generated_path and os.path.exists(generated_path):
+            success = send_photo(generated_path, message, bot_token, chat_id, parse_mode="Markdown")
+            # Cleanup
+            try: os.remove(generated_path)
+            except: pass
+            return success
+        else:
+            # Fallback to plain text if chart generation fails
+            return send_message(message, bot_token, chat_id, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Error in send_signal_with_chart: {e}")
+        return send_message(message, bot_token, chat_id, parse_mode="Markdown")

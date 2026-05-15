@@ -80,5 +80,29 @@ A broader scanner for detecting abnormal buying/selling interest.
     Automate the movement of SL to breakeven once a 5% profit is reached.
 
 ---
+
+## 5. 🔴 15-Min Bearish Breakdown
+Designed to catch intraday weakness in structurally weak stocks.
+
+### Core Logic:
+- **Phase 1 (Pre-Market)**: Daily Price < EMA 50 OR RSI < 55. Shortlists F&O stocks with structural weakness.
+- **Phase 2 (Opening Range)**: Identifies OR Low of first 15 mins (9:15-9:30).
+- **Trigger**: 5-min candle close below both OR Low and Yesterday's Low.
+- **Filters**: Volume spike (>1.2x avg) and Price below VWAP.
+- **Risk Management**: SL at VWAP + 0.2% buffer (Min 0.5%, Max 2.5% risk).
+
+---
+
+## 🟢 6. 15-Min Bullish Breakout
+The reverse of the Bearish Breakdown, optimized for "Bullish Days."
+
+### Core Logic:
+- **Phase 1 (Pre-Market)**: Daily Price > EMA 50 AND RSI > 50. Shortlists F&O stocks with structural strength.
+- **Refresh (9:20-9:30)**: Further narrows the list based on today's opening strength (Price > Open and near Yesterday's High).
+- **Trigger**: 5-min candle close above both OR High and Yesterday's High.
+- **Filters**: Volume spike (>1.2x avg) and Price above VWAP.
+- **Risk Management**: SL at VWAP - 0.2% buffer (Min 0.5%, Max 2.5% risk).
+
+---
 *Created for: Dilip*
-*Last Updated: 2026-05-08*
+*Last Updated: 2026-05-15*

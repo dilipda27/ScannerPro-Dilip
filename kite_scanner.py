@@ -47,7 +47,7 @@ def get_kite_instruments(kite, symbols):
         logging.error(f"Error fetching instruments from Kite: {e}")
         return {}
 
-def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retries=3):
+def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retries=5):
     """
     Fetch historical data from Kite with rate limit handling and retry logic for network stability.
     Kite limit is typically 3 requests per second.
@@ -62,22 +62,34 @@ def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retrie
                 continuous=False,
                 oi=False
             )
-            time.sleep(0.35) # Ensure we don't breach 3 req/sec limit
+            # Kite limit is 3 req/sec. 0.4s sleep provides a safe buffer.
+            time.sleep(0.4) 
             
             if data:
                 df = pd.DataFrame(data)
                 df['date'] = pd.to_datetime(df['date'])
-                # Set date as index
                 df.set_index('date', inplace=True)
                 return df
             return pd.DataFrame()
         except Exception as e:
             error_str = str(e).lower()
-            is_network_error = "failed to resolve" in error_str or "timeout" in error_str or "connection" in error_str
             
+            # Expanded network error detection
+            is_network_error = any(keyword in error_str for keyword in [
+                "failed to resolve", "timeout", "connection", "disconnected", 
+                "network", "stream", "protocol", "ssl", "dns"
+            ])
+            
+            # Handle Rate Limiting (429) specifically if it appears
+            if "429" in error_str or "too many requests" in error_str:
+                logging.warning(f"Rate limit hit for token {instrument_token}. Cooling down for 5s...")
+                time.sleep(5)
+                continue
+
             if is_network_error and attempt < retries - 1:
-                wait_time = (attempt + 1) * 2
-                logging.warning(f"Network error for token {instrument_token} (Attempt {attempt+1}/{retries}). Retrying in {wait_time}s...")
+                # Exponential backoff with a bit of jitter: 3, 6, 12, 24...
+                wait_time = (2 ** (attempt + 1)) + (attempt * 2) 
+                logging.warning(f"Network error for token {instrument_token} (Attempt {attempt+1}/{retries}). Retrying in {wait_time}s... Error: {e}")
                 time.sleep(wait_time)
                 continue
                 

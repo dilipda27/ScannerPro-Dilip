@@ -3,6 +3,7 @@ import datetime
 import scanner
 import kite_scanner
 import high52_scanner
+import bullish_breakout_scanner
 import os
 import pandas as pd
 from kiteconnect import KiteConnect
@@ -658,17 +659,20 @@ if st.session_state.get('kite_access_token'):
     if 'mon_orb' not in st.session_state: st.session_state.mon_orb = False
     if 'mon_52w' not in st.session_state: st.session_state.mon_52w = False
     if 'mon_bearish' not in st.session_state: st.session_state.mon_bearish = False
+    if 'mon_bullish' not in st.session_state: st.session_state.mon_bullish = False
     
     st.session_state.mon_orb = st.sidebar.toggle("15-Min ORB Monitor", value=st.session_state.mon_orb)
     st.session_state.mon_52w = st.sidebar.toggle("52-Week High Monitor", value=st.session_state.mon_52w)
     st.session_state.mon_bearish = st.sidebar.toggle("Bearish Breakdown Monitor", value=st.session_state.mon_bearish)
+    st.session_state.mon_bullish = st.sidebar.toggle("Bullish Breakout Monitor", value=st.session_state.mon_bullish)
     
-    if st.session_state.mon_orb or st.session_state.mon_52w or st.session_state.mon_bearish:
+    if st.session_state.mon_orb or st.session_state.mon_52w or st.session_state.mon_bearish or st.session_state.mon_bullish:
         st.sidebar.success("Live Monitoring ACTIVE")
         if st.sidebar.button("⏹️ Stop All Monitors"):
             st.session_state.mon_orb = False
             st.session_state.mon_52w = False
             st.session_state.mon_bearish = False
+            st.session_state.mon_bullish = False
             st.rerun()
 
 
@@ -706,110 +710,99 @@ else:
     st.sidebar.warning("🔒 Login required for Options Bot")
 
 st.sidebar.markdown("---")
-st.sidebar.header("Scanner Settings")
-strategy = st.sidebar.selectbox(
-    "Select Scanning Strategy",
-    ["Swing Trade Candidates", "Volume Breakout Stocks", "3:15 PM Swing Setup (Kite)", "15-Min ORB Breakout (Kite)", "52-Week High Breakout (Kite)", "15-Min Bearish Breakdown (Kite)"]
+st.sidebar.header("🎯 Strategy Control Center")
+
+# Strategy Categories
+KITE_STRATEGIES = [
+    "15-Min ORB Breakout (Kite)", 
+    "52-Week High Breakout (Kite)", 
+    "15-Min Bearish Breakdown (Kite)", 
+    "15-Min Bullish Breakout (Kite)",
+    "3:15 PM Swing Setup (Kite)"
+]
+YF_STRATEGIES = ["Swing Trade Candidates", "Volume Breakout Stocks"]
+
+selected_strategies = st.sidebar.multiselect(
+    "Select Active Strategies",
+    options=YF_STRATEGIES + KITE_STRATEGIES,
+    default=["15-Min ORB Breakout (Kite)"]
 )
 
+# Helper to get cache counts
+def get_cache_count(file_path):
+    if os.path.exists(file_path):
+        try:
+            df = pd.read_csv(file_path)
+            return len(df)
+        except: return 0
+    return 0
 
-if strategy in ["3:15 PM Swing Setup (Kite)", "15-Min ORB Breakout (Kite)", "52-Week High Breakout (Kite)", "15-Min Bearish Breakdown (Kite)"]:
+# Display Cache Status
+st.sidebar.markdown("### 📊 Cache Status")
+cache_files = {
+    "15-Min ORB Breakout (Kite)": "orb_trending_cache.csv",
+    "52-Week High Breakout (Kite)": "high52_cache.csv",
+    "15-Min Bearish Breakdown (Kite)": "bearish_breakdown_cache.csv",
+    "15-Min Bullish Breakout (Kite)": "bullish_breakout_cache.csv"
+}
+
+for s in selected_strategies:
+    if s in cache_files:
+        count = get_cache_count(cache_files[s])
+        st.sidebar.markdown(f"**{s}**: `{count}` stocks cached")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚡ Bulk Operations")
+
+if any(s in KITE_STRATEGIES for s in selected_strategies):
     if not st.session_state.kite_access_token:
-        st.sidebar.warning("🔒 This strategy requires Kite Login (see top right).")
-    
-    if strategy == "52-Week High Breakout (Kite)" and st.session_state.kite_access_token:
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("Pre-Market Caching")
-        st.sidebar.info("This strategy requires pre-calculated daily data.")
-        if st.sidebar.button("⚡ Run Pre-Market Cache"):
-            # Create progress placeholders in the main area
-            st.info("🔄 Running 52-Week High Pre-Market Cache...")
-            progress_bar_52w = st.progress(0)
-            status_text_52w = st.empty()
-            
-            with st.spinner("Caching 52-week levels..."):
-                kite = KiteConnect(api_key=api_key)
-                kite.set_access_token(st.session_state.kite_access_token)
-                
-                def update_52w_progress(processed, total, symbol):
-                    progress = min(processed / total, 1.0)
-                    progress_bar_52w.progress(progress)
-                    status_text_52w.text(f"Caching: {symbol} ({processed}/{total})")
-                
-                success = high52_scanner.cache_daily_data(kite, progress_callback=update_52w_progress)
-                
-                progress_bar_52w.progress(100)
-                status_text_52w.text("52-Week Caching Complete!")
-                
-                if success:
-                    st.sidebar.success("✅ Caching Complete!")
-                else:
-                    st.sidebar.error("❌ Caching Failed.")
-    
-    if strategy == "15-Min ORB Breakout (Kite)" and st.session_state.kite_access_token:
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("ORB Pre-Market Cache")
-        st.sidebar.info("Shortlist trending stocks for faster ORB scanning.")
+        st.sidebar.warning("🔒 Login required for Kite strategies")
+    else:
+        refresh_orb = st.sidebar.checkbox("Refresh ORB Only", value=False, help="Only updates today's momentum for ORB")
+        refresh_bullish = st.sidebar.checkbox("Refresh Bullish Only", value=False)
+        refresh_bearish = st.sidebar.checkbox("Refresh Bearish Only", value=False)
         
-        # New: Option to only refresh existing list
-        refresh_only = st.sidebar.checkbox("Refresh Existing Shortlist Only", value=False)
-        
-        if st.sidebar.button("⚡ Run ORB Cache"):
-            # Create progress placeholders in the main area
-            st.info("🔄 Running ORB Pre-Market Cache...")
-            progress_bar_cache = st.progress(0)
-            status_text_cache = st.empty()
+        if st.sidebar.button("🚀 Run Sequential Cache", use_container_width=True):
+            kite = KiteConnect(api_key=api_key)
+            kite.set_access_token(st.session_state.kite_access_token)
             
-            with st.spinner("Caching ORB candidates..."):
-                kite = KiteConnect(api_key=api_key)
-                kite.set_access_token(st.session_state.kite_access_token)
-                
-                def update_cache_progress(processed, total, symbol):
-                    progress = min(processed / total, 1.0)
-                    progress_bar_cache.progress(progress)
-                    status_text_cache.text(f"Caching: {symbol} ({processed}/{total})")
-                
-                success = kite_scanner.cache_orb_stocks(kite, progress_callback=update_cache_progress, refresh_shortlist_only=refresh_only)
-                
-                progress_bar_cache.progress(100)
-                status_text_cache.text("ORB Caching Complete!")
-                
-                if success:
-                    st.sidebar.success("✅ ORB Caching Complete!")
-                else:
-                    st.sidebar.error("❌ ORB Caching Failed.")
+            for s in selected_strategies:
+                if s == "15-Min ORB Breakout (Kite)":
+                    st.info(f"🔄 Caching ORB...")
+                    p_bar = st.progress(0)
+                    kite_scanner.cache_orb_stocks(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t), refresh_shortlist_only=refresh_orb)
+                    p_bar.empty()
+                elif s == "52-Week High Breakout (Kite)":
+                    st.info(f"🔄 Caching 52W High...")
+                    p_bar = st.progress(0)
+                    high52_scanner.cache_daily_data(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t))
+                    p_bar.empty()
+                elif s == "15-Min Bearish Breakdown (Kite)":
+                    st.info(f"🔄 Caching Bearish...")
+                    p_bar = st.progress(0)
+                    import bearish_breakdown_scanner
+                    bearish_breakdown_scanner.cache_bearish_candidates(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t), refresh_only=refresh_bearish)
+                    p_bar.empty()
+                elif s == "15-Min Bullish Breakout (Kite)":
+                    st.info(f"🔄 Caching Bullish...")
+                    p_bar = st.progress(0)
+                    bullish_breakout_scanner.cache_bullish_candidates(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t), refresh_only=refresh_bullish)
+                    p_bar.empty()
+            
+            st.success("✅ Bulk Caching Complete!")
+            st.rerun()
 
-    if strategy == "15-Min Bearish Breakdown (Kite)" and st.session_state.kite_access_token:
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("Bearish Pre-Market Cache")
-        st.sidebar.info("Identify structurally weak stocks for the Bearish Breakdown strategy.")
-        
-        if st.sidebar.button("⚡ Run Bearish Cache"):
-            st.info("🔄 Running Bearish Pre-Market Cache...")
-            progress_bar_bear = st.progress(0)
-            status_text_bear = st.empty()
-            
-            with st.spinner("Caching bearish candidates..."):
-                import bearish_breakdown_scanner
-                kite = KiteConnect(api_key=api_key)
-                kite.set_access_token(st.session_state.kite_access_token)
-                
-                def update_bear_progress(processed, total, symbol):
-                    progress = min(processed / total, 1.0)
-                    progress_bar_bear.progress(progress)
-                    status_text_bear.text(f"Caching: {symbol} ({processed}/{total})")
-                
-                success = bearish_breakdown_scanner.cache_bearish_candidates(kite, progress_callback=update_bear_progress)
-                
-                progress_bar_bear.progress(100)
-                status_text_bear.text("Bearish Caching Complete!")
-                
-                if success:
-                    st.sidebar.success("✅ Bearish Caching Complete!")
-                else:
-                    st.sidebar.error("❌ No bearish candidates found.")
-
+st.sidebar.markdown("---")
+# Select strategy to view/run from the active list
+if selected_strategies:
+    strategy = st.sidebar.selectbox("Active View / Manual Scan", selected_strategies)
 else:
+    strategy = None
+    st.sidebar.info("Select at least one strategy above.")
+
+
+# Data Source Information
+if strategy in YF_STRATEGIES:
     st.sidebar.info("This scanner evaluates the latest daily data from Yahoo Finance.")
 
 st.sidebar.markdown("---")
@@ -907,6 +900,35 @@ if st.button(f"Run Scan: {strategy}", type="primary"):
                 except Exception as e:
                     st.error(f"Failed to initialize Bearish Scanner: {e}")
                     results_df = pd.DataFrame()
+            elif strategy == "15-Min Bullish Breakout (Kite)":
+                try:
+                    kite = KiteConnect(api_key=api_key)
+                    kite.set_access_token(st.session_state.kite_access_token)
+                    
+                    def update_progress(processed, total, symbol):
+                        progress = min(processed / total, 1.0)
+                        progress_bar.progress(progress)
+                        status_text.text(f"Processing: {symbol} ({processed}/{total})")
+
+                    results_df = bullish_breakout_scanner.scan_bullish_breakouts(kite, progress_callback=update_progress)
+                    
+                    # --- AUTO-TRADE LOGIC FOR BULLISH BREAKOUT ---
+                    if not results_df.empty:
+                        triggered = results_df[results_df['Status'] == 'Triggered']
+                        if not triggered.empty:
+                            for _, row in triggered.iterrows():
+                                paper_trader.execute_paper_trade(
+                                    ticker=row['Ticker'],
+                                    trade_type="Bullish Breakout",
+                                    entry_price=row['Entry Price'],
+                                    sl=row['Stop Loss'],
+                                    qty=row['Qty'],
+                                    token=row['Token']
+                                )
+                                add_notification(row['Ticker'], f"🟢 Bullish Breakout Entry @ {row['Entry Price']}", category="Bullish")
+                except Exception as e:
+                    st.error(f"Failed to initialize Bullish Scanner: {e}")
+                    results_df = pd.DataFrame()
 
             else:
                 tickers = scanner.get_nifty500_fno_tickers()
@@ -942,7 +964,7 @@ if st.button(f"Run Scan: {strategy}", type="primary"):
             tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
             
             # Determine appropriate chat ID based on strategy
-            if strategy == "15-Min Bearish Breakdown (Kite)":
+            if strategy in ["15-Min Bearish Breakdown (Kite)", "15-Min Bullish Breakout (Kite)"]:
                 tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', '')
             else:
                 tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID', '')
@@ -959,7 +981,7 @@ if st.button(f"Run Scan: {strategy}", type="primary"):
                     st.info("ℹ️ All identified stocks have already been notified today.")
 
 # --- MULTI-STRATEGY LIVE MONITOR LOOP ---
-any_active = st.session_state.get('mon_orb') or st.session_state.get('mon_52w') or st.session_state.get('mon_bearish')
+any_active = st.session_state.get('mon_orb') or st.session_state.get('mon_52w') or st.session_state.get('mon_bearish') or st.session_state.get('mon_bullish')
 
 
 if any_active and st.session_state.get('kite_access_token'):
@@ -991,7 +1013,11 @@ if any_active and st.session_state.get('kite_access_token'):
                     new_orb = res_orb[res_orb['Ticker'].isin(new_tickers)]
                     st.session_state.results_df = new_orb # Update display
                     import telegram_agent
-                    telegram_agent.send_dataframe(new_orb, config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID, scan_name="LIVE: ORB Breakout")
+                    for _, row in new_orb.iterrows():
+                        msg = telegram_agent.format_signal_message(row, "ORB Breakout")
+                        # Fetch 2 days of 5m data for chart (resampled to 15m later)
+                        df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                        telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID, "ORB Breakout")
                     st.toast(f"🔥 {len(new_orb)} New ORB Breakouts!", icon="🚀")
                     
                     for _, row in new_orb.iterrows():
@@ -1075,10 +1101,13 @@ if any_active and st.session_state.get('kite_access_token'):
                         new_bear = triggered_bear[triggered_bear['Ticker'].isin(new_tickers)]
                         st.session_state.results_df = new_bear # Update display
                         import telegram_agent
-                        
                         # Route to Intraday Channel
                         tel_chat_id_intraday = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
-                        telegram_agent.send_dataframe(new_bear, config.TELEGRAM_BOT_TOKEN, tel_chat_id_intraday, scan_name="LIVE: Bearish Breakdown")
+                        
+                        for _, row in new_bear.iterrows():
+                            msg = telegram_agent.format_signal_message(row, "Bearish Breakdown")
+                            df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                            telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, tel_chat_id_intraday, "Bearish Breakdown")
 
                         st.toast(f"🔥 {len(new_bear)} Bearish Breakdowns Triggered!", icon="🔴")
                         
@@ -1102,6 +1131,51 @@ if any_active and st.session_state.get('kite_access_token'):
                                 p_count += 1
                         if p_count > 0:
                             st.toast(f"✅ Executed {p_count} paper trades for Bearish Breakdown", icon="📉")
+
+    # 4. RUN BULLISH BREAKOUT MONITOR
+    if st.session_state.mon_bullish:
+        with st.spinner("Live Scanning Bullish Breakouts..."):
+            res_bull = bullish_breakout_scanner.scan_bullish_breakouts(kite, progress_callback=lambda p, t, s: update_mon_progress(p, t, s, "Bullish"))
+            
+            if not res_bull.empty:
+                triggered_bull = res_bull[res_bull['Status'] == 'Triggered']
+                
+                if not triggered_bull.empty:
+                    import notification_helper
+                    new_tickers = notification_helper.filter_new_tickers("BULLISH", triggered_bull['Ticker'].tolist())
+                    
+                    if new_tickers:
+                        new_bull = triggered_bull[triggered_bull['Ticker'].isin(new_tickers)]
+                        st.session_state.results_df = new_bull
+                        import telegram_agent
+                        tel_chat_id_intraday = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
+                        
+                        for _, row in new_bull.iterrows():
+                            msg = telegram_agent.format_signal_message(row, "Bullish Breakout")
+                            df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                            telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, tel_chat_id_intraday, "Bullish Breakout")
+
+                        st.toast(f"🔥 {len(new_bull)} Bullish Breakouts Triggered!", icon="🟢")
+                        
+                        for _, row in new_bull.iterrows():
+                            add_notification(row['Ticker'], f"🟢 Bullish Breakout Entry @ {row['Entry Price']}", category="Bullish")
+                        
+                        notification_helper.mark_as_notified("BULLISH", new_tickers)
+                        
+                        import paper_trader
+                        p_count = 0
+                        for _, row in new_bull.iterrows():
+                            if paper_trader.execute_paper_trade(
+                                ticker=row['Ticker'],
+                                trade_type="Bullish Breakout",
+                                entry_price=row['Entry Price'],
+                                sl=row['Stop Loss'],
+                                qty=row['Qty'],
+                                token=row.get('Token')
+                            ):
+                                p_count += 1
+                        if p_count > 0:
+                            st.toast(f"✅ Executed {p_count} paper trades for Bullish Breakout", icon="📈")
 
 
     import time
@@ -1209,7 +1283,7 @@ if not current_results.empty:
                 tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
                 
                 # Use strategy-specific chat ID for AI analysis too
-                if strategy == "15-Min Bearish Breakdown (Kite)":
+                if strategy in ["15-Min Bearish Breakdown (Kite)", "15-Min Bullish Breakout (Kite)"]:
                     tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', '')
                 else:
                     tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID', '')
