@@ -4,9 +4,21 @@ import scanner
 import kite_scanner
 import high52_scanner
 import bullish_breakout_scanner
+import long_trade_scanner
 import os
 import pandas as pd
 from kiteconnect import KiteConnect
+from requests.adapters import HTTPAdapter
+
+# Global patch to increase requests connection pool size for multi-threading stability
+_original_kite_init = KiteConnect.__init__
+def _patched_kite_init(self, *args, **kwargs):
+    _original_kite_init(self, *args, **kwargs)
+    if hasattr(self, "reqsession"):
+        adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100)
+        self.reqsession.mount("https://", adapter)
+        self.reqsession.mount("http://", adapter)
+KiteConnect.__init__ = _patched_kite_init
 import config
 import json
 import paper_trader
@@ -319,14 +331,26 @@ if st.session_state.get('kite_access_token'):
             st.session_state.last_telegram_update = datetime.datetime.now() - datetime.timedelta(minutes=11)
             
         if datetime.datetime.now() - st.session_state.last_telegram_update >= datetime.timedelta(minutes=10):
-            import telegram_agent
-            tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
-            tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', getattr(config, 'TELEGRAM_CHAT_ID', ''))
+            now = datetime.datetime.now()
+            current_time = now.time()
+            start_time = datetime.time(9, 30)
+            end_time = datetime.time(15, 25)
             
-            if tel_token and tel_chat_id and not portfolio_df.empty:
-                if telegram_agent.send_portfolio_report(portfolio_df, tel_token, tel_chat_id):
-                    st.session_state.last_telegram_update = datetime.datetime.now()
-                    st.toast("📲 Sent periodic portfolio update to Telegram", icon="📊")
+            # Check if there's at least one active trade
+            has_open_positions = not portfolio_df.empty and (portfolio_df['Status'] == 'Active').any()
+            
+            if start_time <= current_time <= end_time and has_open_positions:
+                import telegram_agent
+                tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
+                tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', getattr(config, 'TELEGRAM_CHAT_ID', ''))
+                
+                if tel_token and tel_chat_id:
+                    if telegram_agent.send_portfolio_report(portfolio_df, tel_token, tel_chat_id):
+                        st.session_state.last_telegram_update = datetime.datetime.now()
+                        st.toast("📲 Sent periodic portfolio update to Telegram", icon="📊")
+            else:
+                # Reset the 10-minute timer if skipped to prevent redundant checks on every page interaction
+                st.session_state.last_telegram_update = datetime.datetime.now()
 
         if not portfolio_df.empty:
             col1, col2 = st.columns([4, 1])
@@ -361,6 +385,38 @@ if st.session_state.get('kite_access_token'):
                         <div style="font-size: 1.5rem; font-weight: 700; color: {pnl_color}; margin: 5px 0;">{(total_net_pnl/total_capital*100 if total_capital>0 else 0):.2f}%</div>
                         <div style="font-size: 0.75rem; color: #94a3b8;">Win/Loss: {win_ratio}</div>
                     </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # --- STRATEGY BREAKDOWN METRICS (HTML) ---
+                strat_df = portfolio_df.groupby('Strategy').agg(
+                    Net_PL=('Net P&L', 'sum'),
+                    Charges=('Est. Charges', 'sum'),
+                    Capital=('EntryPrice', lambda x: (x * portfolio_df.loc[x.index, 'Qty']).sum()),
+                    Count=('Ticker', 'count')
+                ).reset_index()
+                
+                cards_html = []
+                for _, s_row in strat_df.iterrows():
+                    strat_name = s_row['Strategy']
+                    s_net_pl = s_row['Net_PL']
+                    s_charges = s_row['Charges']
+                    s_cap = s_row['Capital']
+                    s_count = s_row['Count']
+                    s_ret = (s_net_pl / s_cap * 100) if s_cap > 0 else 0
+                    
+                    s_color = "#10b981" if s_net_pl >= 0 else "#ef4444"
+                    
+                    card = f'<div style="flex: 1; min-width: 180px; background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; border-left: 5px solid {s_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">' \
+                           f'<div style="font-size: 0.8rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;">🎯 {strat_name}</div>' \
+                           f'<div style="font-size: 1.25rem; font-weight: 700; color: {s_color}; margin: 3px 0;">₹{s_net_pl:,.2f}</div>' \
+                           f'<div style="font-size: 0.7rem; color: #94a3b8;">Pos: {s_count} | Ret: {s_ret:.2f}%</div>' \
+                           f'</div>'
+                    cards_html.append(card)
+                
+                st.markdown(f"""
+                <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 25px;">
+                    {"".join(cards_html)}
                 </div>
                 """, unsafe_allow_html=True)
                 
@@ -423,9 +479,22 @@ if st.session_state.get('kite_access_token'):
                             st.warning("Select tickers.")
                     
                     st.markdown("---")
-                    if st.button("🧹 Clear All", type="secondary"):
+                    st.subheader("🧹 Clear Trades")
+                    
+                    strategies_in_portfolio = portfolio_df['Strategy'].unique().tolist() if 'Strategy' in portfolio_df.columns and not portfolio_df.empty else []
+                    if strategies_in_portfolio:
+                        strategy_to_clear = st.selectbox("Select Strategy to Clear:", strategies_in_portfolio)
+                        if st.button(f"🧹 Clear '{strategy_to_clear}' Trades", use_container_width=True):
+                            paper_trader.clear_portfolio_by_strategy(strategy_to_clear)
+                            st.cache_data.clear()
+                            st.success(f"Cleared {strategy_to_clear}!")
+                            st.rerun()
+                                
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("🚨 Clear Entire Portfolio", type="secondary"):
                         paper_trader.clear_portfolio()
-                        st.success("Cleared!")
+                        st.cache_data.clear()
+                        st.success("Cleared All!")
                         st.rerun()
             
         else:
@@ -436,6 +505,9 @@ if st.session_state.get('kite_access_token'):
         st.subheader("📜 Paper Trade History")
         history_df = paper_trader.get_history()
         if not history_df.empty:
+            if 'Strategy' not in history_df.columns:
+                history_df['Strategy'] = "15-Min ORB"
+                
             # Summary Stats
             total_realized_pnl = history_df['Final P&L'].sum()
             total_capital = history_df['Capital Deployed'].sum()
@@ -445,6 +517,37 @@ if st.session_state.get('kite_access_token'):
             h_col1.metric("Total Realized P&L", f"₹{total_realized_pnl:,.2f}")
             h_col2.metric("Total Capital Deployed", f"₹{total_capital:,.2f}")
             h_col3.metric("Overall Performance", f"{overall_perf:,.2f}%")
+            
+            # --- STRATEGY-WISE REALIZED P&L BREAKDOWN ---
+            st.markdown("##### 🏁 Realized Performance by Strategy")
+            hist_strat = history_df.groupby('Strategy').agg(
+                Realized_PL=('Final P&L', 'sum'),
+                Capital=('Capital Deployed', 'sum'),
+                Trades=('Ticker', 'count')
+            ).reset_index()
+            
+            h_cards_html = []
+            for _, hs_row in hist_strat.iterrows():
+                h_strat_name = hs_row['Strategy']
+                hs_pl = hs_row['Realized_PL']
+                hs_cap = hs_row['Capital']
+                hs_trades = hs_row['Trades']
+                hs_ret = (hs_pl / hs_cap * 100) if hs_cap > 0 else 0
+                
+                hs_color = "#10b981" if hs_pl >= 0 else "#ef4444"
+                
+                card = f'<div style="flex: 1; min-width: 180px; background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; border-left: 5px solid {hs_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">' \
+                       f'<div style="font-size: 0.8rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;">🏁 {h_strat_name}</div>' \
+                       f'<div style="font-size: 1.25rem; font-weight: 700; color: {hs_color}; margin: 3px 0;">₹{hs_pl:,.2f}</div>' \
+                       f'<div style="font-size: 0.7rem; color: #94a3b8;">Trades: {hs_trades} | Return: {hs_ret:.2f}%</div>' \
+                       f'</div>'
+                h_cards_html.append(card)
+                
+            st.markdown(f"""
+            <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 25px;">
+                {"".join(h_cards_html)}
+            </div>
+            """, unsafe_allow_html=True)
             
             st.dataframe(history_df.style.format({
                 "EntryPrice": "₹{:.2f}",
@@ -659,20 +762,47 @@ if st.session_state.get('kite_access_token'):
     if 'mon_orb' not in st.session_state: st.session_state.mon_orb = False
     if 'mon_52w' not in st.session_state: st.session_state.mon_52w = False
     if 'mon_bearish' not in st.session_state: st.session_state.mon_bearish = False
+    if 'mon_vwap_rejection' not in st.session_state: st.session_state.mon_vwap_rejection = False
     if 'mon_bullish' not in st.session_state: st.session_state.mon_bullish = False
+    if 'mon_failed_breakout' not in st.session_state: st.session_state.mon_failed_breakout = False
     
     st.session_state.mon_orb = st.sidebar.toggle("15-Min ORB Monitor", value=st.session_state.mon_orb)
     st.session_state.mon_52w = st.sidebar.toggle("52-Week High Monitor", value=st.session_state.mon_52w)
     st.session_state.mon_bearish = st.sidebar.toggle("Bearish Breakdown Monitor", value=st.session_state.mon_bearish)
+    st.session_state.mon_vwap_rejection = st.sidebar.toggle("Bearish VWAP Rejection Monitor", value=st.session_state.mon_vwap_rejection)
     st.session_state.mon_bullish = st.sidebar.toggle("Bullish Breakout Monitor", value=st.session_state.mon_bullish)
+    st.session_state.mon_failed_breakout = st.sidebar.toggle("Failed Breakout Short Monitor", value=st.session_state.mon_failed_breakout)
     
-    if st.session_state.mon_orb or st.session_state.mon_52w or st.session_state.mon_bearish or st.session_state.mon_bullish:
+    # Persistent Toggle for AI Active Positions Advisor
+    import ai_advisor
+    ai_advisor_state = ai_advisor.is_ai_advisor_enabled()
+    ai_advisor_toggle = st.sidebar.toggle("🤖 AI Position Advisor", value=ai_advisor_state)
+    if ai_advisor_toggle != ai_advisor_state:
+        ai_advisor.set_ai_advisor_enabled(ai_advisor_toggle)
+        st.session_state.last_ai_advisor_run = None # Reset so it triggers immediately when enabled
+        st.toast(f"🤖 AI Position Advisor {'Enabled' if ai_advisor_toggle else 'Disabled'}!", icon="🔔")
+        
+    if ai_advisor_toggle:
+        # Check active hour window
+        now = datetime.datetime.now()
+        current_time = now.time()
+        start_time = datetime.time(9, 45)
+        end_time = datetime.time(15, 25)
+        is_within_window = (start_time <= current_time <= end_time) and (now.weekday() <= 4)
+        if not is_within_window:
+            st.sidebar.warning("⚠️ AI Advisor is active but currently outside market hours (9:45 AM - 3:25 PM Weekdays). It will analyze your positions once active.")
+    
+    if st.session_state.mon_orb or st.session_state.mon_52w or st.session_state.mon_bearish or st.session_state.mon_bullish or st.session_state.mon_vwap_rejection or st.session_state.mon_failed_breakout or ai_advisor_toggle:
         st.sidebar.success("Live Monitoring ACTIVE")
         if st.sidebar.button("⏹️ Stop All Monitors"):
             st.session_state.mon_orb = False
             st.session_state.mon_52w = False
             st.session_state.mon_bearish = False
+            st.session_state.mon_vwap_rejection = False
             st.session_state.mon_bullish = False
+            st.session_state.mon_failed_breakout = False
+            ai_advisor.set_ai_advisor_enabled(False)
+            st.session_state.last_ai_advisor_run = None
             st.rerun()
 
 
@@ -718,7 +848,10 @@ KITE_STRATEGIES = [
     "52-Week High Breakout (Kite)", 
     "15-Min Bearish Breakdown (Kite)", 
     "15-Min Bullish Breakout (Kite)",
-    "3:15 PM Swing Setup (Kite)"
+    "Failed Breakout Short (Kite)",
+    "3:15 PM Swing Setup (Kite)",
+    "EOD Long Swing Setup (Kite)",
+    "Multi-Year Breakout (Kite)"
 ]
 YF_STRATEGIES = ["Swing Trade Candidates", "Volume Breakout Stocks"]
 
@@ -743,7 +876,8 @@ cache_files = {
     "15-Min ORB Breakout (Kite)": "orb_trending_cache.csv",
     "52-Week High Breakout (Kite)": "high52_cache.csv",
     "15-Min Bearish Breakdown (Kite)": "bearish_breakdown_cache.csv",
-    "15-Min Bullish Breakout (Kite)": "bullish_breakout_cache.csv"
+    "15-Min Bullish Breakout (Kite)": "bullish_breakout_cache.csv",
+    "Failed Breakout Short (Kite)": "failed_breakout_cache.csv"
 }
 
 for s in selected_strategies:
@@ -761,6 +895,7 @@ if any(s in KITE_STRATEGIES for s in selected_strategies):
         refresh_orb = st.sidebar.checkbox("Refresh ORB Only", value=False, help="Only updates today's momentum for ORB")
         refresh_bullish = st.sidebar.checkbox("Refresh Bullish Only", value=False)
         refresh_bearish = st.sidebar.checkbox("Refresh Bearish Only", value=False)
+        refresh_failed = st.sidebar.checkbox("Refresh Failed Breakout Only", value=False)
         
         if st.sidebar.button("🚀 Run Sequential Cache", use_container_width=True):
             kite = KiteConnect(api_key=api_key)
@@ -787,6 +922,12 @@ if any(s in KITE_STRATEGIES for s in selected_strategies):
                     st.info(f"🔄 Caching Bullish...")
                     p_bar = st.progress(0)
                     bullish_breakout_scanner.cache_bullish_candidates(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t), refresh_only=refresh_bullish)
+                    p_bar.empty()
+                elif s == "Failed Breakout Short (Kite)":
+                    st.info(f"🔄 Caching Failed Breakout...")
+                    p_bar = st.progress(0)
+                    import failed_breakout_scanner
+                    failed_breakout_scanner.cache_failed_candidates(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t), refresh_only=refresh_failed)
                     p_bar.empty()
             
             st.success("✅ Bulk Caching Complete!")
@@ -818,7 +959,7 @@ if 'all_results' not in st.session_state:
 
 # Allow users to run scan
 if st.button(f"Run Scan: {strategy}", type="primary"):
-    if strategy in ["3:15 PM Swing Setup (Kite)", "15-Min ORB Breakout (Kite)"] and not st.session_state.kite_access_token:
+    if strategy in ["3:15 PM Swing Setup (Kite)", "15-Min ORB Breakout (Kite)", "EOD Long Swing Setup (Kite)", "Multi-Year Breakout (Kite)"] and not st.session_state.kite_access_token:
         st.error("Please authenticate with Kite Connect in the sidebar first.")
     else:
         with st.spinner(f"Running {strategy} scan... This may take a few minutes depending on the strategy."):
@@ -894,7 +1035,8 @@ if st.button(f"Run Scan: {strategy}", type="primary"):
                                     entry_price=row['Entry Price'],
                                     sl=row['Stop Loss'],
                                     qty=row['Qty'],
-                                    token=row['Token']
+                                    token=row['Token'],
+                                    strategy="Bearish Breakdown"
                                 )
                                 add_notification(row['Ticker'], f"🔴 Bearish Breakdown Entry @ {row['Entry Price']}", category="Bearish")
                 except Exception as e:
@@ -923,11 +1065,76 @@ if st.button(f"Run Scan: {strategy}", type="primary"):
                                     entry_price=row['Entry Price'],
                                     sl=row['Stop Loss'],
                                     qty=row['Qty'],
-                                    token=row['Token']
+                                    token=row['Token'],
+                                    strategy="Bullish Breakout"
                                 )
                                 add_notification(row['Ticker'], f"🟢 Bullish Breakout Entry @ {row['Entry Price']}", category="Bullish")
                 except Exception as e:
                     st.error(f"Failed to initialize Bullish Scanner: {e}")
+                    results_df = pd.DataFrame()
+            elif strategy == "Failed Breakout Short (Kite)":
+                try:
+                    import failed_breakout_scanner
+                    kite = KiteConnect(api_key=api_key)
+                    kite.set_access_token(st.session_state.kite_access_token)
+                    
+                    def update_progress(processed, total, symbol):
+                        progress = min(processed / total, 1.0)
+                        progress_bar.progress(progress)
+                        status_text.text(f"Processing: {symbol} ({processed}/{total})")
+
+                    results_df = failed_breakout_scanner.scan_failed_breakouts(kite, progress_callback=update_progress)
+                    
+                    # --- AUTO-TRADE LOGIC FOR FAILED BREAKOUT SHORT ---
+                    if not results_df.empty:
+                        triggered = results_df[results_df['Status'] == 'Triggered']
+                        if not triggered.empty:
+                            for _, row in triggered.iterrows():
+                                paper_trader.execute_paper_trade(
+                                    ticker=row['Ticker'],
+                                    trade_type="Failed Breakout",
+                                    entry_price=row['Entry Price'],
+                                    sl=row['Stop Loss'],
+                                    qty=row['Qty'],
+                                    token=row['Token'],
+                                    strategy="Failed Breakout Short"
+                                )
+                                add_notification(row['Ticker'], f"🔴 Failed Breakout Entry @ {row['Entry Price']}", category="Bearish")
+                except Exception as e:
+                    st.error(f"Failed to initialize Failed Breakout Scanner: {e}")
+                    results_df = pd.DataFrame()
+            elif strategy == "EOD Long Swing Setup (Kite)":
+                try:
+                    kite = KiteConnect(api_key=api_key)
+                    kite.set_access_token(st.session_state.kite_access_token)
+                    
+                    def update_progress(processed, total, symbol):
+                        progress = min(processed / total, 1.0) if total > 0 else 0
+                        progress_bar.progress(progress)
+                        status_text.text(f"Processing: {symbol} ({processed}/{total})")
+
+                    results_df = long_trade_scanner.scan_long_setups(kite, progress_callback=update_progress)
+                    if results_df.empty:
+                        st.info("Market Context may not be bullish, or no stocks matched criteria.")
+                except Exception as e:
+                    st.error(f"Failed to run EOD Long Swing Scanner: {e}")
+                    results_df = pd.DataFrame()
+            elif strategy == "Multi-Year Breakout (Kite)":
+                try:
+                    kite = KiteConnect(api_key=api_key)
+                    kite.set_access_token(st.session_state.kite_access_token)
+                    
+                    def update_progress(processed, total, symbol):
+                        progress = min(processed / total, 1.0) if total > 0 else 0
+                        progress_bar.progress(progress)
+                        status_text.text(f"Processing: {symbol} ({processed}/{total})")
+
+                    import multi_year_breakout_scanner
+                    results_df = multi_year_breakout_scanner.scan_multi_year_breakouts(kite, progress_callback=update_progress)
+                    if results_df.empty:
+                        st.info("Market Context may not be bullish, or no stocks matched criteria.")
+                except Exception as e:
+                    st.error(f"Failed to run Multi-Year Breakout Scanner: {e}")
                     results_df = pd.DataFrame()
 
             else:
@@ -981,7 +1188,15 @@ if st.button(f"Run Scan: {strategy}", type="primary"):
                     st.info("ℹ️ All identified stocks have already been notified today.")
 
 # --- MULTI-STRATEGY LIVE MONITOR LOOP ---
-any_active = st.session_state.get('mon_orb') or st.session_state.get('mon_52w') or st.session_state.get('mon_bearish') or st.session_state.get('mon_bullish')
+import ai_advisor
+any_active = (
+    st.session_state.get('mon_orb') or 
+    st.session_state.get('mon_52w') or 
+    st.session_state.get('mon_bearish') or 
+    st.session_state.get('mon_bullish') or 
+    st.session_state.get('mon_vwap_rejection') or
+    ai_advisor.is_ai_advisor_enabled()
+)
 
 
 if any_active and st.session_state.get('kite_access_token'):
@@ -1011,35 +1226,42 @@ if any_active and st.session_state.get('kite_access_token'):
                 
                 if new_tickers:
                     new_orb = res_orb[res_orb['Ticker'].isin(new_tickers)]
-                    st.session_state.results_df = new_orb # Update display
-                    import telegram_agent
-                    for _, row in new_orb.iterrows():
-                        msg = telegram_agent.format_signal_message(row, "ORB Breakout")
-                        # Fetch 2 days of 5m data for chart (resampled to 15m later)
-                        df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
-                        telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID, "ORB Breakout")
-                    st.toast(f"🔥 {len(new_orb)} New ORB Breakouts!", icon="🚀")
-                    
-                    for _, row in new_orb.iterrows():
-                        add_notification(row['Ticker'], f"New ORB Breakout: {row['Breakout']} at ₹{row['Breakout Price']}")
-                    
-                    notification_helper.mark_as_notified("ORB", new_tickers)
-                    
-                    # --- AUTO-EXECUTE PAPER TRADES ---
+                    # Check active portfolio and filter out existing tickers
                     import paper_trader
-                    p_count = 0
-                    for _, row in new_orb.iterrows():
-                        if paper_trader.execute_paper_trade(
-                            ticker=row['Ticker'],
-                            trade_type=row['Breakout'],
-                            entry_price=row['Breakout Price'],
-                            sl=row['Paper SL'],
-                            qty=row['Paper Qty'],
-                            token=row.get('Token')
-                        ):
-                            p_count += 1
-                    if p_count > 0:
-                        st.toast(f"✅ Executed {p_count} paper trades for ORB", icon="📈")
+                    p_df = paper_trader.get_portfolio()
+                    active_tickers = p_df[p_df['Status'] == 'Active']['Ticker'].tolist() if not p_df.empty else []
+                    new_orb = new_orb[~new_orb['Ticker'].isin(active_tickers)]
+                    
+                    if not new_orb.empty:
+                        st.session_state.results_df = new_orb # Update display
+                        import telegram_agent
+                        for _, row in new_orb.iterrows():
+                            msg = telegram_agent.format_signal_message(row, "ORB Breakout")
+                            # Fetch 2 days of 5m data for chart (resampled to 15m later)
+                            df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                            telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID, "ORB Breakout", row_data=row)
+                        st.toast(f"🔥 {len(new_orb)} New ORB Breakouts!", icon="🚀")
+                        
+                        for _, row in new_orb.iterrows():
+                            add_notification(row['Ticker'], f"New ORB Breakout: {row['Breakout']} at ₹{row['Breakout Price']}")
+                        
+                        notification_helper.mark_as_notified("ORB", new_orb['Ticker'].tolist())
+                        
+                        # --- AUTO-EXECUTE PAPER TRADES ---
+                        p_count = 0
+                        for _, row in new_orb.iterrows():
+                            if paper_trader.execute_paper_trade(
+                                ticker=row['Ticker'],
+                                trade_type=row['Breakout'],
+                                entry_price=row['Breakout Price'],
+                                sl=row['Paper SL'],
+                                qty=row['Paper Qty'],
+                                token=row.get('Token'),
+                                strategy="15-Min ORB"
+                            ):
+                                p_count += 1
+                        if p_count > 0:
+                            st.toast(f"✅ Executed {p_count} paper trades for ORB", icon="📈")
 
     # 2. RUN 52W HIGH MONITOR
     if st.session_state.mon_52w:
@@ -1077,7 +1299,8 @@ if any_active and st.session_state.get('kite_access_token'):
                             entry_price=row['LTP'],
                             sl=row['LTP'] * 0.97, # 3% SL for 52W
                             qty=qty,
-                            token=row.get('Token')
+                            token=row.get('Token'),
+                            strategy="52W High"
                         ):
                             p_count += 1
                     if p_count > 0:
@@ -1099,38 +1322,109 @@ if any_active and st.session_state.get('kite_access_token'):
                     
                     if new_tickers:
                         new_bear = triggered_bear[triggered_bear['Ticker'].isin(new_tickers)]
-                        st.session_state.results_df = new_bear # Update display
+                        # Check active portfolio and filter out existing tickers
+                        import paper_trader
+                        p_df = paper_trader.get_portfolio()
+                        active_tickers = p_df[p_df['Status'] == 'Active']['Ticker'].tolist() if not p_df.empty else []
+                        new_bear = new_bear[~new_bear['Ticker'].isin(active_tickers)]
+                        
+                        if not new_bear.empty:
+                            st.session_state.results_df = new_bear # Update display
+                            import telegram_agent
+                            # Route to Intraday Channel
+                            tel_chat_id_intraday = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
+                            
+                            for _, row in new_bear.iterrows():
+                                msg = telegram_agent.format_signal_message(row, "Bearish Breakdown")
+                                df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                                telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, tel_chat_id_intraday, "Bearish Breakdown", row_data=row)
+
+                            st.toast(f"🔥 {len(new_bear)} Bearish Breakdowns Triggered!", icon="🔴")
+                            
+                            for _, row in new_bear.iterrows():
+                                add_notification(row['Ticker'], f"🔴 Bearish Breakdown Entry @ {row['Entry Price']}", category="Bearish")
+                            
+                            notification_helper.mark_as_notified("BEARISH", new_bear['Ticker'].tolist())
+                            
+                            # --- AUTO-EXECUTE PAPER TRADES ---
+                            p_count = 0
+                            for _, row in new_bear.iterrows():
+                                if paper_trader.execute_paper_trade(
+                                    ticker=row['Ticker'],
+                                    trade_type="Bearish Breakdown",
+                                    entry_price=row['Entry Price'],
+                                    sl=row['Stop Loss'],
+                                    qty=row['Qty'],
+                                    token=row.get('Token'),
+                                    strategy="Bearish Breakdown"
+                                ):
+                                    p_count += 1
+                            if p_count > 0:
+                                st.toast(f"✅ Executed {p_count} paper trades for Bearish Breakdown", icon="📉")
+
+    # 3.5. RUN BEARISH VWAP REJECTION MONITOR
+    if st.session_state.mon_vwap_rejection:
+        with st.spinner("Live Scanning Bearish VWAP Rejections..."):
+            import bearish_vwap_rejection_scanner
+            res_vwap, monitored_vwap = bearish_vwap_rejection_scanner.scan_bearish_vwap_rejections(kite)
+            
+            if not res_vwap.empty:
+                import notification_helper
+                new_tickers = notification_helper.filter_new_tickers("BEARISH_VWAP_REJECTION", res_vwap['Ticker'].tolist())
+                
+                if new_tickers:
+                    new_vwap = res_vwap[res_vwap['Ticker'].isin(new_tickers)]
+                    # Check active portfolio and filter out existing tickers
+                    import paper_trader
+                    p_df = paper_trader.get_portfolio()
+                    active_tickers = p_df[p_df['Status'] == 'Active']['Ticker'].tolist() if not p_df.empty else []
+                    new_vwap = new_vwap[~new_vwap['Ticker'].isin(active_tickers)]
+                    
+                    if not new_vwap.empty:
+                        st.session_state.results_df = new_vwap  # Update display
                         import telegram_agent
                         # Route to Intraday Channel
                         tel_chat_id_intraday = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
                         
-                        for _, row in new_bear.iterrows():
-                            msg = telegram_agent.format_signal_message(row, "Bearish Breakdown")
-                            df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
-                            telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, tel_chat_id_intraday, "Bearish Breakdown")
+                        for _, row in new_vwap.iterrows():
+                            msg = (
+                                f"📉 *Bearish VWAP Rejection Alert* 📉\\n\\n"
+                                f"🎯 *Ticker*: {row['Ticker']}\\n"
+                                f"🔴 *Entry (Short)*: ₹{row['Price']}\\n"
+                                f"🛡️ *Stop Loss*: ₹{row['SL']}\\n"
+                                f"🟢 *Target 1 (1.5R)*: ₹{row['Target_1']}\\n"
+                                f"🟢 *Target 2 (3.0R)*: ₹{row['Target_2']}\\n"
+                                f"📊 *Pattern*: {row['Pattern']}\\n"
+                                f"🛡️ *Zone*: {row['Zone']} Rejection\\n"
+                                f"📈 *Risk/Reward*: {row['Risk_Reward']}\\n"
+                            )
+                            df_chart = kite_scanner.fetch_kite_data(kite, int(row['Token']), datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                            telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, tel_chat_id_intraday, "Bearish VWAP Rejection", row_data=row)
 
-                        st.toast(f"🔥 {len(new_bear)} Bearish Breakdowns Triggered!", icon="🔴")
+                        st.toast(f"🔥 {len(new_vwap)} Bearish VWAP Rejections Triggered!", icon="🔴")
                         
-                        for _, row in new_bear.iterrows():
-                            add_notification(row['Ticker'], f"🔴 Bearish Breakdown Entry @ {row['Entry Price']}", category="Bearish")
+                        for _, row in new_vwap.iterrows():
+                            add_notification(row['Ticker'], f"🔴 Bearish VWAP Rejection Entry @ {row['Price']}", category="Bearish")
                         
-                        notification_helper.mark_as_notified("BEARISH", new_tickers)
+                        notification_helper.mark_as_notified("BEARISH_VWAP_REJECTION", new_vwap['Ticker'].tolist())
                         
                         # --- AUTO-EXECUTE PAPER TRADES ---
-                        import paper_trader
                         p_count = 0
-                        for _, row in new_bear.iterrows():
+                        for _, row in new_vwap.iterrows():
+                            capital = 250000 # Default capital per trade
+                            qty = int(capital / row['Price'])
                             if paper_trader.execute_paper_trade(
                                 ticker=row['Ticker'],
-                                trade_type="Bearish Breakdown",
-                                entry_price=row['Entry Price'],
-                                sl=row['Stop Loss'],
-                                qty=row['Qty'],
-                                token=row.get('Token')
+                                trade_type="Bearish Pullback",
+                                entry_price=row['Price'],
+                                sl=row['SL'],
+                                qty=qty,
+                                token=int(row['Token']),
+                                strategy="Bearish VWAP Rejection"
                             ):
                                 p_count += 1
                         if p_count > 0:
-                            st.toast(f"✅ Executed {p_count} paper trades for Bearish Breakdown", icon="📉")
+                            st.toast(f"✅ Executed {p_count} paper trades for Bearish VWAP Rejection", icon="📉")
 
     # 4. RUN BULLISH BREAKOUT MONITOR
     if st.session_state.mon_bullish:
@@ -1146,37 +1440,124 @@ if any_active and st.session_state.get('kite_access_token'):
                     
                     if new_tickers:
                         new_bull = triggered_bull[triggered_bull['Ticker'].isin(new_tickers)]
-                        st.session_state.results_df = new_bull
-                        import telegram_agent
-                        tel_chat_id_intraday = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
-                        
-                        for _, row in new_bull.iterrows():
-                            msg = telegram_agent.format_signal_message(row, "Bullish Breakout")
-                            df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
-                            telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, tel_chat_id_intraday, "Bullish Breakout")
-
-                        st.toast(f"🔥 {len(new_bull)} Bullish Breakouts Triggered!", icon="🟢")
-                        
-                        for _, row in new_bull.iterrows():
-                            add_notification(row['Ticker'], f"🟢 Bullish Breakout Entry @ {row['Entry Price']}", category="Bullish")
-                        
-                        notification_helper.mark_as_notified("BULLISH", new_tickers)
-                        
+                        # Check active portfolio and filter out existing tickers
                         import paper_trader
-                        p_count = 0
-                        for _, row in new_bull.iterrows():
-                            if paper_trader.execute_paper_trade(
-                                ticker=row['Ticker'],
-                                trade_type="Bullish Breakout",
-                                entry_price=row['Entry Price'],
-                                sl=row['Stop Loss'],
-                                qty=row['Qty'],
-                                token=row.get('Token')
-                            ):
-                                p_count += 1
-                        if p_count > 0:
-                            st.toast(f"✅ Executed {p_count} paper trades for Bullish Breakout", icon="📈")
+                        p_df = paper_trader.get_portfolio()
+                        active_tickers = p_df[p_df['Status'] == 'Active']['Ticker'].tolist() if not p_df.empty else []
+                        new_bull = new_bull[~new_bull['Ticker'].isin(active_tickers)]
+                        
+                        if not new_bull.empty:
+                            st.session_state.results_df = new_bull
+                            import telegram_agent
+                            tel_chat_id_intraday = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
+                            
+                            for _, row in new_bull.iterrows():
+                                msg = telegram_agent.format_signal_message(row, "Bullish Breakout")
+                                df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                                telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, tel_chat_id_intraday, "Bullish Breakout", row_data=row)
 
+                            st.toast(f"🔥 {len(new_bull)} Bullish Breakouts Triggered!", icon="🟢")
+                            
+                            for _, row in new_bull.iterrows():
+                                add_notification(row['Ticker'], f"🟢 Bullish Breakout Entry @ {row['Entry Price']}", category="Bullish")
+                            
+                            notification_helper.mark_as_notified("BULLISH", new_bull['Ticker'].tolist())
+                            
+                            p_count = 0
+                            for _, row in new_bull.iterrows():
+                                if paper_trader.execute_paper_trade(
+                                    ticker=row['Ticker'],
+                                    trade_type="Bullish Breakout",
+                                    entry_price=row['Entry Price'],
+                                    sl=row['Stop Loss'],
+                                    qty=row['Qty'],
+                                    token=row.get('Token'),
+                                    strategy="Bullish Breakout"
+                                ):
+                                    p_count += 1
+                            if p_count > 0:
+                                st.toast(f"✅ Executed {p_count} paper trades for Bullish Breakout", icon="📈")
+
+        # 5. RUN FAILED BREAKOUT SHORT MONITOR
+        if st.session_state.mon_failed_breakout:
+            with st.spinner("Live Scanning Failed Breakouts..."):
+                import failed_breakout_scanner
+                res_failed = failed_breakout_scanner.scan_failed_breakouts(kite, progress_callback=lambda p, t, s: update_mon_progress(p, t, s, "Failed Breakout"))
+                
+                if not res_failed.empty:
+                    triggered_failed = res_failed[res_failed['Status'] == 'Triggered']
+                    
+                    if not triggered_failed.empty:
+                        import notification_helper
+                        new_tickers = notification_helper.filter_new_tickers("FAILED_BREAKOUT", triggered_failed['Ticker'].tolist())
+                        
+                        if new_tickers:
+                            new_fail = triggered_failed[triggered_failed['Ticker'].isin(new_tickers)]
+                            # Check active portfolio and filter out existing tickers
+                            import paper_trader
+                            p_df = paper_trader.get_portfolio()
+                            active_tickers = p_df[p_df['Status'] == 'Active']['Ticker'].tolist() if not p_df.empty else []
+                            new_fail = new_fail[~new_fail['Ticker'].isin(active_tickers)]
+                            
+                            if not new_fail.empty:
+                                st.session_state.results_df = new_fail
+                                import telegram_agent
+                                tel_chat_id_intraday = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
+                                
+                                for _, row in new_fail.iterrows():
+                                    msg = telegram_agent.format_signal_message(row, "Failed Breakout Short")
+                                    df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                                    telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, tel_chat_id_intraday, "Failed Breakout Short", row_data=row)
+
+                                st.toast(f"🔥 {len(new_fail)} Failed Breakouts Triggered!", icon="🔴")
+                                
+                                for _, row in new_fail.iterrows():
+                                    add_notification(row['Ticker'], f"🔴 Failed Breakout Entry @ {row['Entry Price']}", category="Bearish")
+                                
+                                notification_helper.mark_as_notified("FAILED_BREAKOUT", new_fail['Ticker'].tolist())
+                                
+                                p_count = 0
+                                for _, row in new_fail.iterrows():
+                                    if paper_trader.execute_paper_trade(
+                                        ticker=row['Ticker'],
+                                        trade_type="Failed Breakout",
+                                        entry_price=row['Entry Price'],
+                                        sl=row['Stop Loss'],
+                                        qty=row['Qty'],
+                                        token=row.get('Token'),
+                                        strategy="Failed Breakout Short"
+                                    ):
+                                        p_count += 1
+                                if p_count > 0:
+                                    st.toast(f"✅ Executed {p_count} paper trades for Failed Breakout Short", icon="📈")
+
+        # 6. RUN AI ACTIVE POSITIONS ADVISOR MONITOR
+        if ai_advisor.is_ai_advisor_enabled():
+            # Check if 10 minutes have passed since last run
+            now = datetime.datetime.now()
+            should_run = False
+            if 'last_ai_advisor_run' not in st.session_state or st.session_state.last_ai_advisor_run is None:
+                should_run = True
+            else:
+                elapsed = (now - st.session_state.last_ai_advisor_run).total_seconds()
+                if elapsed >= 600: # 10 minutes
+                    should_run = True
+                    
+            # Time window check: 9:45 AM to 3:25 PM, weekday check
+            current_time = now.time()
+            start_time = datetime.time(9, 45)
+            end_time = datetime.time(15, 25)
+            is_within_window = (start_time <= current_time <= end_time) and (now.weekday() <= 4)
+            
+            if should_run and is_within_window:
+                with st.spinner("AI Active Positions Advisor: Running technical conviction analysis..."):
+                    try:
+                        import scheduler_service
+                        scheduler_service.run_ai_position_advisor()
+                        st.session_state.last_ai_advisor_run = now
+                        st.success("🤖 AI Advisor recommendations successfully analyzed and dispatched to Telegram!")
+                    except Exception as ai_err:
+                        st.error(f"Failed to run AI Position Advisor: {ai_err}")
 
     import time
     time.sleep(60) # Reduced to 60 seconds for more realistic intraday monitoring
@@ -1229,7 +1610,8 @@ if not current_results.empty:
                     entry_price=row['Breakout Price'],
                     sl=row['Paper SL'],
                     qty=row['Paper Qty'],
-                    token=row.get('Token')
+                    token=row.get('Token'),
+                    strategy="15-Min ORB"
                 ):
                     count += 1
             st.success(f"Executed {count} new paper trades!")
@@ -1260,6 +1642,67 @@ if not current_results.empty:
                         count += 1
                 st.success(f"Successfully added {count} trades to Swing Portfolio!")
                 st.rerun()
+
+    if strategy == "Multi-Year Breakout (Kite)":
+        st.markdown("### 🎯 Selective Swing Execution")
+        selected_tickers = st.multiselect("Choose tickers to paper trade:", current_results['Ticker'].tolist(), key="myb_multiselect")
+        
+        if st.button("📝 Execute Selected as Swing Trades", key="myb_execute_button"):
+            if not selected_tickers:
+                st.warning("Please select at least one stock.")
+            else:
+                import paper_trader
+                count = 0
+                for ticker in selected_tickers:
+                    row = current_results[current_results['Ticker'] == ticker].iloc[0]
+                    # Default capital 1L per trade
+                    qty = round(100000 / row['Close']) if row['Close'] > 0 else 0
+                    if paper_trader.execute_swing_trade(
+                        ticker=row['Ticker'],
+                        entry_price=row['Close'],
+                        target=row['Target 1 (1.5R)'],
+                        sl=row['Stop Loss'],
+                        qty=qty,
+                        token=row.get('Token')
+                    ):
+                        count += 1
+                st.success(f"Successfully added {count} trades to Swing Portfolio!")
+                st.rerun()
+    
+    if strategy == "Failed Breakout Short (Kite)":
+        st.markdown("### 🎯 Selective Intraday Short Execution")
+        selected_tickers = st.multiselect("Choose tickers to paper trade:", current_results['Ticker'].tolist(), key="failed_multiselect")
+        
+        if st.button("📝 Execute Selected as Failed Breakout Short Trades", key="failed_execute_button"):
+            if not selected_tickers:
+                st.warning("Please select at least one stock.")
+            else:
+                import paper_trader
+                count = 0
+                for ticker in selected_tickers:
+                    row = current_results[current_results['Ticker'] == ticker].iloc[0]
+                    # Since entry price can be a string "Wait for trigger < X", check if it is floatable
+                    try:
+                        entry_price = float(row['Entry Price'])
+                        sl = float(row['Stop Loss'])
+                        qty = int(row['Qty'])
+                    except ValueError:
+                        st.error(f"Cannot execute trade for {ticker}: Entry Price '{row['Entry Price']}' is not triggered yet.")
+                        continue
+                        
+                    if paper_trader.execute_paper_trade(
+                        ticker=row['Ticker'],
+                        trade_type="Failed Breakout",
+                        entry_price=entry_price,
+                        sl=sl,
+                        qty=qty,
+                        token=int(row.get('Token', 0)),
+                        strategy="Failed Breakout Short"
+                    ):
+                        count += 1
+                if count > 0:
+                    st.success(f"Successfully executed {count} paper trades!")
+                    st.rerun()
     
     st.markdown("### AI Conviction Analysis")
     gemini_key = getattr(config, 'GEMINI_API_KEY', '')
@@ -1283,7 +1726,7 @@ if not current_results.empty:
                 tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
                 
                 # Use strategy-specific chat ID for AI analysis too
-                if strategy in ["15-Min Bearish Breakdown (Kite)", "15-Min Bullish Breakout (Kite)"]:
+                if strategy in ["15-Min Bearish Breakdown (Kite)", "15-Min Bullish Breakout (Kite)", "Failed Breakout Short (Kite)"]:
                     tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', '')
                 else:
                     tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID', '')
