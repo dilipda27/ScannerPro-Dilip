@@ -414,11 +414,71 @@ if st.session_state.get('kite_access_token'):
                            f'</div>'
                     cards_html.append(card)
                 
-                st.markdown(f"""
-                <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 25px;">
-                    {"".join(cards_html)}
-                </div>
-                """, unsafe_allow_html=True)
+                # Render strategies and intraday equity curve only if toggled
+                show_intra_curve = st.toggle("📈 Show Today's Equity Curve", value=False, key="toggle_intra_curve")
+                
+                if show_intra_curve:
+                    col_strat, col_curve = st.columns([1, 1])
+                    with col_strat:
+                        st.markdown(f"""
+                        <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 25px;">
+                            {"".join([c.replace('flex: 1; min-width: 180px;', 'width: 100%;') for c in cards_html])}
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                    with col_curve:
+                        try:
+                            _kite_curve = KiteConnect(api_key=getattr(config, 'KITE_API_KEY', ''))
+                            _kite_curve.set_access_token(st.session_state.kite_access_token)
+                            intra_curve = paper_trader.get_intraday_equity_curve(_kite_curve)
+                            
+                            if not intra_curve.empty and len(intra_curve) > 1:
+                                import plotly.graph_objects as go
+                                
+                                fig = go.Figure()
+                                fig.add_trace(go.Scatter(
+                                    x=intra_curve['Time'],
+                                    y=intra_curve['Cumulative P&L'],
+                                    mode='lines+markers',
+                                    line=dict(color='#3b82f6', width=3, shape='spline'),
+                                    marker=dict(size=6, color='#2563eb'),
+                                    fill='tozeroy',
+                                    fillcolor='rgba(59, 130, 246, 0.1)',
+                                    name='Intraday P&L',
+                                    text=intra_curve.apply(lambda r: f"Ticker: {r['Ticker']}<br>Trade P&L: ₹{r['P&L']:.2f}<br>Cumulative: ₹{r['Cumulative P&L']:.2f}", axis=1),
+                                    hoverinfo='text'
+                                ))
+                                
+                                fig.update_layout(
+                                    title=dict(text="📈 Today's Intraday Equity Curve", font=dict(size=14, color="#1e293b", weight="bold")),
+                                    margin=dict(l=20, r=20, t=35, b=20),
+                                    height=230,
+                                    plot_bgcolor='rgba(0,0,0,0)',
+                                    paper_bgcolor='rgba(0,0,0,0)',
+                                    xaxis=dict(
+                                        showgrid=True,
+                                        gridcolor='#e2e8f0',
+                                        tickfont=dict(color="#64748b", size=9)
+                                    ),
+                                    yaxis=dict(
+                                        showgrid=True,
+                                        gridcolor='#e2e8f0',
+                                        tickfont=dict(color="#64748b", size=9)
+                                    ),
+                                    hovermode="x unified"
+                                )
+                                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                            else:
+                                st.info("Insufficient data for today's intraday equity curve.")
+                        except Exception as curve_err:
+                            st.caption(f"Could not load intraday equity curve: {curve_err}")
+                else:
+                    # Render strategy cards horizontally when chart is hidden
+                    st.markdown(f"""
+                    <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 25px;">
+                        {"".join(cards_html)}
+                    </div>
+                    """, unsafe_allow_html=True)
                 
                 if st.button("🔄 Refresh Live P&L", use_container_width=False):
                     st.rerun()
@@ -579,6 +639,56 @@ if st.session_state.get('kite_access_token'):
 
     try:
         full_swing_df = _cached_swing(st.session_state.kite_access_token)
+        
+        # --- SWING LIFETIME PERSISTENT EQUITY CURVE ---
+        show_swing_curve = st.toggle("📊 Show Lifetime Swing Equity Curve", value=False, key="toggle_swing_curve")
+        if show_swing_curve:
+            try:
+                _kite_swing = KiteConnect(api_key=getattr(config, 'KITE_API_KEY', ''))
+                _kite_swing.set_access_token(st.session_state.kite_access_token)
+                swing_curve = paper_trader.get_swing_equity_curve(_kite_swing)
+                
+                if not swing_curve.empty and len(swing_curve) > 1:
+                    import plotly.graph_objects as go
+                    
+                    fig_swing = go.Figure()
+                    fig_swing.add_trace(go.Scatter(
+                        x=swing_curve['Date'],
+                        y=swing_curve['Cumulative P&L'],
+                        mode='lines+markers',
+                        line=dict(color='#10b981', width=3, shape='spline'),
+                        marker=dict(size=6, color='#059669'),
+                        fill='tozeroy',
+                        fillcolor='rgba(16, 185, 129, 0.08)',
+                        name='Swing Lifetime P&L',
+                        text=swing_curve.apply(lambda r: f"Date: {r['Date']}<br>Realized Net: ₹{r['P&L']:.2f}<br>Cumulative: ₹{r['Cumulative P&L']:.2f}<br>Tickers: {r['Ticker']}", axis=1),
+                        hoverinfo='text'
+                    ))
+                    
+                    fig_swing.update_layout(
+                        title=dict(text="📈 Lifetime Swing Equity Curve (Persistent)", font=dict(size=14, color="#1e293b", weight="bold")),
+                        margin=dict(l=20, r=20, t=35, b=20),
+                        height=250,
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        xaxis=dict(
+                            showgrid=True,
+                            gridcolor='#e2e8f0',
+                            tickfont=dict(color="#64748b", size=9)
+                        ),
+                        yaxis=dict(
+                            showgrid=True,
+                            gridcolor='#e2e8f0',
+                            tickfont=dict(color="#64748b", size=9)
+                        ),
+                        hovermode="x unified"
+                    )
+                    st.plotly_chart(fig_swing, use_container_width=True, config={'displayModeBar': False})
+                else:
+                    st.info("Insufficient data for lifetime swing equity curve.")
+            except Exception as swing_curve_err:
+                st.caption(f"Could not load swing equity curve: {swing_curve_err}")
+
         if not full_swing_df.empty:
             # Split into Active and Closed
             active_swing = full_swing_df[full_swing_df['Status'] == 'OPEN'].copy()

@@ -596,7 +596,8 @@ def execute_bot_recommendation(kite, index_name):
                     entry_price=ltp,
                     sl=ltp * 1.5, # 50% SL for options selling
                     qty=qty,
-                    token=token
+                    token=token,
+                    strategy="Options Bot"
                 )
                 return True, sym
             except:

@@ -124,3 +124,87 @@ Keep your analysis concise, professional, and actionable. Do not provide general
                 return f"Error connecting to AI service: {e}"
                 
     return f"Error: All AI models are currently unavailable. Last Error: {last_error}"
+
+def analyze_active_positions(prompt, gemini_api_key):
+    """
+    Sends the compiled active position analysis prompt to Gemini AI and returns actionable advice.
+    """
+    max_retries = 5
+    models_to_try = [
+        'gemini-2.0-flash',
+        'gemini-pro-latest',
+        'gemini-flash-latest',
+        'gemini-2.0-flash-lite',
+        'gemini-2.5-flash',
+        'gemini-2.5-pro',
+        'gemini-3-pro-preview'
+    ]
+    
+    last_error = "None"
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={gemini_api_key}"
+        
+        for attempt in range(max_retries):
+            try:
+                payload = {
+                    "contents": [{
+                        "parts": [{"text": prompt}]
+                    }]
+                }
+                headers = {'Content-Type': 'application/json'}
+                
+                response = requests.post(url, headers=headers, data=json.dumps(payload))
+                res_data = response.json()
+                
+                if response.status_code == 200:
+                    return res_data['candidates'][0]['content']['parts'][0]['text']
+                else:
+                    last_error = res_data.get('error', {}).get('message', response.text)
+                    
+                    if response.status_code == 404:
+                        break
+                        
+                    if response.status_code in [429, 503, 500]:
+                        if response.status_code == 429:
+                            break
+                            
+                        if attempt < max_retries - 1:
+                            wait_time = (attempt + 1) * 3
+                            time.sleep(wait_time)
+                            continue
+                            
+                    return f"The AI analysis service is temporarily busy. (Status: {response.status_code}, Error: {last_error})"
+
+            except Exception as e:
+                last_error = str(e)
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                return f"Error connecting to AI service: {e}"
+                
+    return f"Error: All AI models are currently unavailable. Last Error: {last_error}"
+
+SETTINGS_FILE = ".ai_advisor_settings.json"
+
+def is_ai_advisor_enabled() -> bool:
+    """Helper to check if the AI Active Positions Advisor monitor is enabled."""
+    import os
+    import json
+    if not os.path.exists(SETTINGS_FILE):
+        return True # Default to enabled
+    try:
+        with open(SETTINGS_FILE, "r") as f:
+            data = json.load(f)
+            return data.get("enabled", True)
+    except:
+        return True
+
+def set_ai_advisor_enabled(enabled: bool):
+    """Helper to persistent-save the toggle state of the AI Advisor."""
+    import json
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump({"enabled": enabled}, f)
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to save AI Advisor settings: {e}")

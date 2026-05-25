@@ -266,6 +266,27 @@ def scan_failed_breakouts(kite, progress_callback=None):
             candle_range = confirmed_high - confirmed_low
             is_bearish_shape = confirmed_close < (confirmed_high + confirmed_low) / 2 if candle_range > 0 else True
             
+            # 3b. Robust Bearish Candlestick Shape: Must be a red candle OR have a long upper shadow (shooting star / pinbar shape)
+            confirmed_open = confirmed_candle['open']
+            is_red = confirmed_close < confirmed_open
+            body_size = abs(confirmed_close - confirmed_open)
+            upper_wick = confirmed_high - max(confirmed_open, confirmed_close)
+            is_bearish_rejection = is_red or (upper_wick > 1.5 * body_size if body_size > 0 else True)
+            
+            # 3c. Breakout Duration Constraint: Count consecutive candles closed above R before the trigger candle
+            consecutive_above = 0
+            try:
+                idx_trigger = df_today.index.get_loc(confirmed_candle.name)
+                for i in range(idx_trigger - 1, -1, -1):
+                    prev_c = df_today.iloc[i]
+                    if prev_c['close'] > R:
+                        consecutive_above += 1
+                    else:
+                        break
+            except Exception as ex:
+                logging.warning(f"Error calculating consecutive candles above R: {ex}")
+                consecutive_above = 0
+                
             # 4. Volume Spike Confirmation: Volume on trigger/breakout is high
             vol_spike = confirmed_volume >= 1.5 * confirmed_vol_avg if confirmed_vol_avg > 0 else True
             
@@ -281,8 +302,8 @@ def scan_failed_breakouts(kite, progress_callback=None):
             slippage_pct = (R - ltp) / R * 100
             is_chasing = slippage_pct > 0.4
             
-            # Combine all conditions
-            if is_trap_triggered and is_bearish_shape and vol_spike and below_vwap and not_oversold and not is_chasing:
+            # Combine all conditions (incorporating the new consecutive_above and bearish rejection shape filters)
+            if is_trap_triggered and is_bearish_shape and is_bearish_rejection and (consecutive_above <= 4) and vol_spike and below_vwap and not_oversold and not is_chasing:
                 # Active Trading Hours (Post-9:30 AM and Before 3:00 PM)
                 if datetime.time(9, 30) <= to_date.time() <= datetime.time(15, 0):
                     # Risk Management parameters

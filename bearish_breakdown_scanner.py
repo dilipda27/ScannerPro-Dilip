@@ -148,11 +148,27 @@ def scan_bearish_breakdowns(kite, progress_callback=None):
         import pytz
         to_date = pytz.timezone('Asia/Kolkata').localize(to_date)
         
-    from_date_intra = to_date.replace(hour=9, minute=15, second=0, microsecond=0)
+    from_date_intra = to_date - datetime.timedelta(days=4)
     
     total = len(cache_df)
     processed = 0
     
+    # --- BROAD MARKET TREND CHECK (NIFTY 50) ---
+    nifty_bullish = False
+    try:
+        nifty_token_map = kite_scanner.get_kite_instruments(kite, ["NIFTY 50"])
+        if nifty_token_map and "NIFTY 50" in nifty_token_map:
+            nifty_token = nifty_token_map["NIFTY 50"]
+            nifty_from = to_date.replace(hour=9, minute=15, second=0, microsecond=0)
+            nifty_df = kite_scanner.fetch_kite_data(kite, nifty_token, nifty_from, to_date, "5minute")
+            if not nifty_df.empty:
+                nifty_open = nifty_df.iloc[0]['open']
+                nifty_ltp = nifty_df.iloc[-1]['close']
+                nifty_bullish = nifty_ltp > nifty_open
+                logging.info(f"Broad Market Check -> Nifty Open: {nifty_open:.2f}, LTP: {nifty_ltp:.2f} | Bullish? {nifty_bullish}")
+    except Exception as ne:
+        logging.warning(f"Failed to fetch Nifty 50 trend: {ne}")
+        
     # --- BATCH PRE-SCREEN (Speed Optimization) ---
     # Fetch LTP for all candidates in one call to see who is actually near or below OR Low/PDL
     logging.info(f"Pre-screening {total} bearish candidates with batch quotes...")
@@ -196,6 +212,9 @@ def scan_bearish_breakdowns(kite, progress_callback=None):
             if df_intra.empty:
                 continue
                 
+            # Calculate 5-minute indicators on the historical + today intraday data
+            df_intra.ta.rsi(length=14, append=True)
+            
             df_today = df_intra[df_intra.index.date == to_date.date()]
             if df_today.empty:
                 continue
@@ -222,26 +241,43 @@ def scan_bearish_breakdowns(kite, progress_callback=None):
                 confirmed_candle = df_today.iloc[-2] if len(df_today) > 1 else latest_candle_data
             
             confirmed_close = confirmed_candle['close']
+            confirmed_high = confirmed_candle['high']
+            confirmed_low = confirmed_candle['low']
             
-            # --- PHASE 2 CRITERIA ---
-            # Volume Spike
+            # --- CONVICTION & OVEREXTENSION FILTERS ---
+            # 1. Volume Spike (Demand higher volume if market is bullish)
             first_15m_vol = or_candles['volume'].sum()
             avg_15m_vol = row['Avg_15m_Vol']
-            vol_spike = first_15m_vol > (1.2 * avg_15m_vol) if avg_15m_vol > 0 else True
+            vol_spike_threshold = 1.8 if nifty_bullish else 1.2
+            vol_spike = first_15m_vol > (vol_spike_threshold * avg_15m_vol) if avg_15m_vol > 0 else True
             
             vwap = calculate_vwap(df_today)
             below_vwap = ltp < vwap
             
-            # --- PHASE 3 TRIGGER ---
+            # 2. RSI Intraday Oversold Filter
+            # If 5-min RSI is < 30, the move is extended in the short-term (likely to bounce immediately)
+            latest_rsi = latest_candle['RSI_14'] if 'RSI_14' in latest_candle else 50
+            is_oversold = latest_rsi < 30
+            
+            # 3. Daily Extension Filter
+            # If already down > 3.0% from yesterday's close, the stock is already extended daily
+            day_change_pct = (ltp - row['Prev_Close']) / row['Prev_Close'] * 100
+            is_extended = day_change_pct < -3.0
+            
+            # 4. Candle Shape confirmation
+            # The breakdown candle must close in the lower half of its range to ensure bearish dominance
+            candle_ok = confirmed_close < (confirmed_high + confirmed_low) / 2
+            
+            # --- TRIGGER ---
             breakdown_level = min(or_low, pdl)
             is_breakdown = confirmed_close < breakdown_level
             
-            # --- SLIPPAGE / NO-CHASE FILTER (New) ---
-            # Discard if price has already dropped > 0.8% from the breakdown level
+            # --- SLIPPAGE / NO-CHASE FILTER (Tightened from 0.8% to 0.4%) ---
+            # Discard if price has already dropped > 0.4% from the breakdown level
             slippage_pct = (breakdown_level - ltp) / breakdown_level * 100
-            is_chasing = slippage_pct > 0.8
+            is_chasing = slippage_pct > 0.4
             
-            if vol_spike and below_vwap and not is_chasing:
+            if vol_spike and below_vwap and not is_chasing and not is_oversold and not is_extended and candle_ok:
                 # If Post-9:30 and BEFORE 15:00 (3 PM) and Breakdown Triggered
                 if datetime.time(9, 30) <= to_date.time() <= datetime.time(15, 0) and is_breakdown:
 

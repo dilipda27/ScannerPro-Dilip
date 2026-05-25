@@ -165,7 +165,7 @@ def format_signal_message(row, scan_name):
     msg += f"\n_Generated at {datetime.datetime.now().strftime('%H:%M')}_"
     return msg
 
-def send_signal_with_chart(ticker: str, message: str, df_5m: pd.DataFrame, bot_token: str, chat_id: str, scan_name: str):
+def send_signal_with_chart(ticker: str, message: str, df_5m: pd.DataFrame, bot_token: str, chat_id: str, scan_name: str, row_data=None):
     """
     Generates a chart from 5m data (resampled to 15m) and sends it with the signal message.
     """
@@ -174,8 +174,31 @@ def send_signal_with_chart(ticker: str, message: str, df_5m: pd.DataFrame, bot_t
         # Resample to 15m as requested by user
         df_15m = chart_helper.resample_to_15m(df_5m)
         
-        # Generate chart
-        generated_path = chart_helper.generate_intraday_chart(df_15m, ticker, scan_name, output_path=chart_path)
+        # Extract signal details from row_data if available
+        entry_price = None
+        sl_price = None
+        signal_type = None
+        trigger_time = None
+        
+        if row_data is not None:
+            if hasattr(row_data, 'get'):
+                entry_price = row_data.get('Price') or row_data.get('Breakout Price') or row_data.get('LTP') or row_data.get('Entry Price')
+                sl_price = row_data.get('SL') or row_data.get('Paper SL') or row_data.get('Stop Loss')
+                trigger_time = row_data.get('Timestamp') or row_data.get('Breakout Time')
+                
+                # Detect signal type (BUY / SELL)
+                breakout = str(row_data.get('Breakout', '')).lower()
+                if "bearish" in breakout or "bearish" in scan_name.lower() or "short" in breakout:
+                    signal_type = "SELL"
+                elif "bullish" in breakout or "bullish" in scan_name.lower() or "long" in breakout:
+                    signal_type = "BUY"
+        
+        # Generate chart with custom overlays
+        generated_path = chart_helper.generate_intraday_chart(
+            df_15m, ticker, scan_name, output_path=chart_path,
+            entry_price=entry_price, sl_price=sl_price,
+            signal_type=signal_type, trigger_time=trigger_time
+        )
         
         if generated_path and os.path.exists(generated_path):
             success = send_photo(generated_path, message, bot_token, chat_id, parse_mode="Markdown")

@@ -7,7 +7,34 @@ import requests
 import io
 import os
 import json
+import threading
 from kiteconnect import KiteConnect
+from requests.adapters import HTTPAdapter
+
+# Global patch to increase requests connection pool size for multi-threading stability
+_original_kite_init = KiteConnect.__init__
+def _patched_kite_init(self, *args, **kwargs):
+    _original_kite_init(self, *args, **kwargs)
+    if hasattr(self, "reqsession"):
+        adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100)
+        self.reqsession.mount("https://", adapter)
+        self.reqsession.mount("http://", adapter)
+KiteConnect.__init__ = _patched_kite_init
+
+# --- THREAD-SAFE RATE LIMITER FOR KITE API ---
+# Kite API allows 3 requests per second.
+_kite_rate_limit_lock = threading.Lock()
+_last_kite_request_time = 0.0
+KITE_REQ_GAP = 0.35 # 0.35s gap ensures max 2.8 requests per second across all threads
+
+def enforce_kite_rate_limit():
+    global _last_kite_request_time
+    with _kite_rate_limit_lock:
+        current_time = time.time()
+        elapsed = current_time - _last_kite_request_time
+        if elapsed < KITE_REQ_GAP:
+            time.sleep(KITE_REQ_GAP - elapsed)
+        _last_kite_request_time = time.time()
 
 ORB_CACHE_FILE = "orb_trending_cache.csv"
 
@@ -54,6 +81,7 @@ def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retrie
     """
     for attempt in range(retries):
         try:
+            enforce_kite_rate_limit()
             data = kite.historical_data(
                 instrument_token=instrument_token,
                 from_date=from_date,
@@ -62,8 +90,6 @@ def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retrie
                 continuous=False,
                 oi=False
             )
-            # Kite limit is 3 req/sec. 0.4s sleep provides a safe buffer.
-            time.sleep(0.4) 
             
             if data:
                 df = pd.DataFrame(data)

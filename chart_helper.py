@@ -3,10 +3,11 @@ import pandas as pd
 import os
 import datetime
 
-def generate_intraday_chart(df, ticker, scan_name, output_path="temp_chart.png"):
+def generate_intraday_chart(df, ticker, scan_name, output_path="temp_chart.png", 
+                            entry_price=None, sl_price=None, signal_type=None, trigger_time=None):
     """
     Generates a professional candlestick chart using mplfinance.
-    Looks like a real charting platform.
+    Looks like a real charting platform with trendlines and signal arrows.
     """
     if df.empty:
         return None
@@ -16,7 +17,6 @@ def generate_intraday_chart(df, ticker, scan_name, output_path="temp_chart.png")
         df.columns = [c.lower() for c in df.columns]
         
         # Define the style
-        # 'charles' is a professional candlestick style (green/red)
         mc = mpf.make_marketcolors(up='g', down='r',
                                  edge='inherit',
                                  wick='inherit',
@@ -28,11 +28,69 @@ def generate_intraday_chart(df, ticker, scan_name, output_path="temp_chart.png")
                              facecolor='#0d1117', # Dark GitHub-style background
                              edgecolor='#30363d')
 
-        # Add VWAP as an overlay if available
+        # Add overlays (VWAP + Signal arrow)
         addplots = []
         if 'vwap' in df.columns:
-            # Bold, distinguished yellow line for VWAP
             addplots.append(mpf.make_addplot(df['vwap'], color='#ffdf00', linestyle='-', width=2.0, alpha=0.9))
+
+        # Add Buy/Sell signal arrow marker if signal details are provided
+        if signal_type and trigger_time is not None:
+            trigger_idx = None
+            if isinstance(trigger_time, str):
+                # Try to match timezone-stripped date/time string format
+                for idx in df.index:
+                    if trigger_time in str(idx) or idx.strftime('%H:%M') == trigger_time:
+                        trigger_idx = idx
+                        break
+            else:
+                try:
+                    # Safely convert to a tz-naive Timestamp
+                    t_time = pd.Timestamp(trigger_time)
+                    if t_time.tz is not None:
+                        t_time = t_time.tz_convert('Asia/Kolkata').tz_localize(None)
+                    
+                    # Snap to the nearest datetime index point (completely immune to non-monotonic indexes)
+                    time_diffs = abs(df.index - t_time)
+                    nearest_pos = time_diffs.argmin()
+                    trigger_idx = df.index[nearest_pos]
+                except Exception as ex:
+                    print(f"Error snapping trigger time: {ex}")
+            
+            # Default to the most recent candle if not matched
+            if trigger_idx is None:
+                trigger_idx = df.index[-1]
+                
+            # Construct marker series with NaN everywhere except at trigger index
+            marker_series = pd.Series(index=df.index, dtype=float)
+            if signal_type == "BUY":
+                # Draw green up arrow below the candle low
+                marker_series.loc[trigger_idx] = df.loc[trigger_idx, 'low'] * 0.997
+                addplots.append(mpf.make_addplot(marker_series, type='scatter', marker='^', markersize=180, color='#10b981'))
+            elif signal_type == "SELL":
+                # Draw red down arrow above the candle high
+                marker_series.loc[trigger_idx] = df.loc[trigger_idx, 'high'] * 1.003
+                addplots.append(mpf.make_addplot(marker_series, type='scatter', marker='v', markersize=180, color='#ef4444'))
+
+        # Prepare horizontal lines (Entry and SL)
+        hlines_list = []
+        colors_list = []
+        if entry_price is not None:
+            try:
+                hlines_list.append(float(entry_price))
+                colors_list.append('#3b82f6') # Blue for Entry Price
+            except: pass
+        if sl_price is not None:
+            try:
+                hlines_list.append(float(sl_price))
+                colors_list.append('#ef4444') # Red for Stop Loss (SL)
+            except: pass
+            
+        hlines_spec = None
+        if hlines_list:
+            hlines_spec = dict(hlines=hlines_list,
+                               colors=colors_list,
+                               linestyle='--',
+                               linewidths=[1.5] * len(hlines_list))
 
         # Save to file
         mpf.plot(df, 
@@ -40,12 +98,13 @@ def generate_intraday_chart(df, ticker, scan_name, output_path="temp_chart.png")
                  style=s,
                  title=f"\n{ticker} - {scan_name}",
                  addplot=addplots,
+                 hlines=hlines_spec,
                  figsize=(10, 6),
                  savefig=dict(fname=output_path, dpi=120, bbox_inches='tight'),
                  volume=True,
                  tight_layout=True,
-                 show_nontrading=False, # This hides the gaps between days and pre/post market
-                 datetime_format='%H:%M') # Force HH:MM format
+                 show_nontrading=False,
+                 datetime_format='%H:%M')
                  
         return output_path
     except Exception as e:

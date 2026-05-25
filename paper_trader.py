@@ -65,7 +65,7 @@ def _get_tokens_for(kite, symbols: list) -> dict:
 
 def get_portfolio():
     if not os.path.exists(PORTFOLIO_FILE):
-        return pd.DataFrame(columns=["Ticker", "Type", "EntryPrice", "SL", "Qty", "EntryTime", "Status"])
+        return pd.DataFrame(columns=["Ticker", "Type", "EntryPrice", "SL", "Qty", "EntryTime", "Status", "Strategy"])
     try:
         df = pd.read_csv(PORTFOLIO_FILE)
         # Migrate old 'OPEN' status to 'Active'
@@ -74,15 +74,25 @@ def get_portfolio():
                 df.loc[df['Status'] == 'OPEN', 'Status'] = 'Active'
                 df.to_csv(PORTFOLIO_FILE, index=False) # Save migration
         
+        # Migrate/Ensure Strategy column exists
+        if not df.empty and 'Strategy' not in df.columns:
+            df['Strategy'] = "15-Min ORB"
+            df.to_csv(PORTFOLIO_FILE, index=False)
+            
+        # Migrate/Ensure InitialSL column exists
+        if not df.empty and 'InitialSL' not in df.columns:
+            df['InitialSL'] = df['SL']
+            df.to_csv(PORTFOLIO_FILE, index=False)
+            
         # Clean up any existing duplicates (same Ticker and Status)
         if not df.empty:
             df = df.drop_duplicates(subset=['Ticker', 'Status'], keep='first')
             
         return df
     except:
-        return pd.DataFrame(columns=["Ticker", "Type", "EntryPrice", "SL", "Qty", "EntryTime", "Status"])
+        return pd.DataFrame(columns=["Ticker", "Type", "EntryPrice", "SL", "InitialSL", "Qty", "EntryTime", "Status", "Strategy"])
 
-def execute_paper_trade(ticker, trade_type, entry_price, sl, qty, token=None):
+def execute_paper_trade(ticker, trade_type, entry_price, sl, qty, token=None, strategy="15-Min ORB"):
     df = get_portfolio()
     
     # Check if already active in current session (avoid duplicate entries on same day)
@@ -95,15 +105,17 @@ def execute_paper_trade(ticker, trade_type, entry_price, sl, qty, token=None):
         "Type": trade_type,
         "EntryPrice": entry_price,
         "SL": sl,
+        "InitialSL": sl,
         "Qty": qty,
         "Token": token,
         "EntryTime": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "Status": "Active"
+        "Status": "Active",
+        "Strategy": strategy
     }
     
     df = pd.concat([df, pd.DataFrame([new_trade])], ignore_index=True)
     df.to_csv(PORTFOLIO_FILE, index=False)
-    logging.info(f"🚀 Paper Trade Executed: {trade_type} {ticker} @ {entry_price} (SL: {sl}, Qty: {qty})")
+    logging.info(f"🚀 Paper Trade Executed: {trade_type} ({strategy}) {ticker} @ {entry_price} (SL: {sl}, Qty: {qty})")
     return True
 
 def exit_trade(ticker, kite, override_price=None):
@@ -153,7 +165,13 @@ def exit_trade(ticker, kite, override_price=None):
         # Save to History
         history_df = pd.DataFrame([trade])
         if os.path.exists(HISTORY_FILE):
-            history_df.to_csv(HISTORY_FILE, mode='a', header=False, index=False)
+            try:
+                existing_history = pd.read_csv(HISTORY_FILE)
+                combined_history = pd.concat([existing_history, history_df], ignore_index=True, sort=False)
+                combined_history.to_csv(HISTORY_FILE, index=False)
+            except Exception as read_err:
+                logging.warning(f"Error appending history: {read_err}. Overwriting.")
+                history_df.to_csv(HISTORY_FILE, index=False)
         else:
             history_df.to_csv(HISTORY_FILE, index=False)
             
@@ -212,6 +230,63 @@ def clear_portfolio():
         os.remove(PORTFOLIO_FILE)
     logging.info("🧹 Paper Portfolio Cleared")
     return True
+
+def clear_portfolio_by_strategy(strategy: str):
+    """Clear paper trades for a specific strategy."""
+    df = get_portfolio()
+    if not df.empty and 'Strategy' in df.columns:
+        filtered_df = df[df['Strategy'] != strategy]
+        filtered_df.to_csv(PORTFOLIO_FILE, index=False)
+        logging.info(f"🧹 Paper Portfolio Cleared for strategy: {strategy}")
+    return True
+
+def apply_multi_stage_trailing_sl(row, ltp):
+    """
+    Applies unified 3-stage trailing stop-loss logic for both Bullish and Bearish trades.
+    Returns the new SL price if trailing is triggered, else returns the current SL.
+    """
+    try:
+        entry = float(row['EntryPrice'])
+        current_sl = float(row['SL'])
+        # Use fixed InitialSL for consistent R-Unit risk calculation
+        initial_sl = float(row.get('InitialSL', current_sl))
+        trade_type = str(row['Type'])
+        
+        if "Bullish" in trade_type:
+            initial_risk = entry - initial_sl
+            if initial_risk <= 0: return current_sl
+            
+            # Stage 3: Price >= +2.0R -> Trail to +1.0R
+            if ltp >= entry + (2.0 * initial_risk):
+                new_sl = entry + (1.0 * initial_risk)
+                if new_sl > current_sl: return new_sl
+            # Stage 2: Price >= +1.5R -> Trail to +0.5R
+            elif ltp >= entry + (1.5 * initial_risk):
+                new_sl = entry + (0.5 * initial_risk)
+                if new_sl > current_sl: return new_sl
+            # Stage 1: Price >= +1.0R -> Trail to Break-Even (Entry)
+            elif ltp >= entry + (1.0 * initial_risk):
+                if entry > current_sl: return entry
+                
+        elif "Bearish" in trade_type:
+            initial_risk = initial_sl - entry
+            if initial_risk <= 0: return current_sl
+            
+            # Stage 3: Price <= -2.0R -> Trail to +1.0R (downwards)
+            if ltp <= entry - (2.0 * initial_risk):
+                new_sl = entry - (1.0 * initial_risk)
+                if new_sl < current_sl: return new_sl
+            # Stage 2: Price <= -1.5R -> Trail to +0.5R
+            elif ltp <= entry - (1.5 * initial_risk):
+                new_sl = entry - (0.5 * initial_risk)
+                if new_sl < current_sl: return new_sl
+            # Stage 1: Price <= -1.0R -> Trail to Break-Even (Entry)
+            elif ltp <= entry - (1.0 * initial_risk):
+                if entry < current_sl: return entry
+    except Exception as e:
+        logging.error(f"Error calculating trailing SL: {e}")
+        
+    return row['SL']
 
 def update_portfolio_pnl(kite):
     """
@@ -291,24 +366,19 @@ def update_portfolio_pnl(kite):
                 processed_df.at[idx, 'SL Status'] = "🏁 Closed"
                 continue
                 
-            # --- TRAILING SL LOGIC (Structural & Patient) ---
+            # --- TRAILING SL LOGIC (Multi-Stage R-Based) ---
             if row['Status'] == 'Active' and row['Current Price'] is not None:
                 entry = row['EntryPrice']
                 current_sl = row['SL']
                 ltp = row['Current Price']
                 
-                if "Bearish" in str(row['Type']) and current_sl > entry:
-                    # Target move is 2R. Trail at 1.5R (75% of target)
-                    initial_risk = current_sl - entry
-                    if initial_risk > 0:
-                        trail_trigger = entry - (1.5 * initial_risk)
-                        if ltp <= trail_trigger:
-                            new_sl = entry
-                            df.loc[(df['Ticker'] == row['Ticker']) & (df['Status'] == 'Active'), 'SL'] = new_sl
-                            processed_df.at[idx, 'SL'] = new_sl
-                            row['SL'] = new_sl # Update for the hit check below
-                            df.to_csv(PORTFOLIO_FILE, index=False) # Persist trail
-                            logging.info(f"🛡️ Bearish Trail: {row['Ticker']} moved to Break-even (Entry: {entry})")
+                new_sl = apply_multi_stage_trailing_sl(row, ltp)
+                if new_sl != current_sl:
+                    df.loc[(df['Ticker'] == row['Ticker']) & (df['Status'] == 'Active'), 'SL'] = new_sl
+                    processed_df.at[idx, 'SL'] = new_sl
+                    row['SL'] = new_sl # Update for the hit check below
+                    df.to_csv(PORTFOLIO_FILE, index=False) # Persist trail
+                    logging.info(f"🛡️ Multi-Stage Trail: {row['Ticker']} Stop-Loss moved from ₹{current_sl:.2f} to ₹{new_sl:.2f} (Entry: ₹{entry:.2f}, LTP: ₹{ltp:.2f})")
 
             is_hit = False
             sl = row['SL']
@@ -342,7 +412,11 @@ def update_portfolio_pnl(kite):
         processed_df['Est. Charges'] = processed_df.apply(calc_intraday_charges, axis=1)
         processed_df['Net P&L'] = processed_df['Live P&L'] - processed_df['Est. Charges']
         
-        return processed_df[["Ticker", "Type", "EntryPrice", "Current Price", "Qty", "SL", "SL Status", "Status", "Live P&L", "Est. Charges", "Net P&L", "EntryTime", "Token"]]
+        # Ensure Strategy is present in processed_df
+        if 'Strategy' not in processed_df.columns:
+            processed_df['Strategy'] = "15-Min ORB"
+            
+        return processed_df[["Ticker", "Type", "Strategy", "EntryPrice", "Current Price", "Qty", "SL", "SL Status", "Status", "Live P&L", "Est. Charges", "Net P&L", "EntryTime", "Token"]]
         
     except Exception as e:
         logging.error(f"Error updating portfolio P&L: {e}")
@@ -512,11 +586,16 @@ def update_swing_portfolio(kite):
                 df.loc[df['Ticker'] == row['Ticker'], 'Live P&L'] = locked_pnl
                 df.loc[df['Ticker'] == row['Ticker'], 'Return %'] = (locked_pnl / (row['EntryPrice'] * row['Qty'])) * 100
                 
+                # Record the exit date
+                exit_date = datetime.now().strftime("%Y-%m-%d")
+                df.loc[df['Ticker'] == row['Ticker'], 'ExitDate'] = exit_date
+                
                 # Reflect in open_trades for the current return
                 open_trades.loc[idx, 'Status'] = new_status
                 open_trades.loc[idx, 'Current Price'] = exit_price
                 open_trades.loc[idx, 'Live P&L'] = locked_pnl
                 open_trades.loc[idx, 'Return %'] = (locked_pnl / (row['EntryPrice'] * row['Qty'])) * 100
+                open_trades.loc[idx, 'ExitDate'] = exit_date
                 logging.info(f"🔔 Swing Auto-Exit: {row['Ticker']} at {exit_price} ({new_status})")
             else:
                 # --- TRAILING SL LOGIC ---
@@ -542,7 +621,7 @@ def update_swing_portfolio(kite):
                     logging.info(f"🛡️ Trailing SL Updated for {row['Ticker']}: {current_sl} -> {new_sl} ({ret_pct:.1f}% gain)")
 
         # Update df with all calculated columns from open_trades
-        for col in ['Current Price', 'Live P&L', 'Return %', 'Day P&L', 'Days Held']:
+        for col in ['Current Price', 'Live P&L', 'Return %', 'Day P&L', 'Days Held', 'ExitDate']:
             if col in open_trades.columns:
                 for idx, row in open_trades.iterrows():
                     df.loc[df['Ticker'] == row['Ticker'], col] = row[col]
@@ -584,3 +663,197 @@ def update_swing_portfolio(kite):
     except Exception as e:
         logging.error(f"Error updating swing portfolio: {e}")
         return open_trades
+
+
+# ---------------------------------------------------------------------------
+# PAPER TRADING EQUITY CURVE CALCULATIONS (Separate Intraday & Swing)
+# ---------------------------------------------------------------------------
+
+def get_intraday_equity_curve(kite=None):
+    """
+    Computes today's intraday paper trading equity curve.
+    Combines today's closed trades from HISTORY_FILE and today's active trades from get_portfolio().
+    Returns a DataFrame with columns: ['Time', 'Ticker', 'Type', 'Strategy', 'P&L', 'Cumulative P&L']
+    """
+    points = []
+    
+    # 1. Closed Trades of Today (from HISTORY_FILE)
+    history_df = get_history()
+    if not history_df.empty:
+        for _, row in history_df.iterrows():
+            exit_time_str = row.get('ExitTime')
+            if pd.isna(exit_time_str) or not exit_time_str:
+                exit_time_str = row.get('EntryTime')
+            
+            final_pnl = float(row.get('Final P&L', 0))
+            
+            entry_price = float(row.get('EntryPrice', 0))
+            exit_price = float(row.get('ExitPrice', entry_price))
+            qty = float(row.get('Qty', 0))
+            
+            # Compute Zerodha intraday charges
+            buy_val = entry_price * qty
+            sell_val = exit_price * qty
+            turnover = buy_val + sell_val
+            brok = min(20, 0.0003 * buy_val) + min(20, 0.0003 * sell_val)
+            stt = 0.00025 * sell_val
+            trans = 0.0000345 * turnover
+            gst = 0.18 * (brok + trans)
+            sebi = (turnover / 10000000) * 10
+            stamp = 0.00003 * buy_val
+            charges = brok + stt + trans + gst + sebi + stamp
+            
+            net_pnl = final_pnl - charges
+            
+            points.append({
+                'Time': exit_time_str,
+                'Ticker': row.get('Ticker', 'Unknown'),
+                'Type': 'Closed',
+                'Strategy': row.get('Strategy', '15-Min ORB'),
+                'P&L': net_pnl
+            })
+            
+    # 2. Active Trades of Today (from update_portfolio_pnl)
+    if kite:
+        try:
+            active_df = update_portfolio_pnl(kite)
+            if not active_df.empty:
+                active_only = active_df[active_df['Status'] == 'Active']
+                for _, row in active_only.iterrows():
+                    net_pnl = float(row.get('Net P&L', 0))
+                    current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    points.append({
+                        'Time': current_time_str,
+                        'Ticker': row.get('Ticker', 'Unknown'),
+                        'Type': 'Active',
+                        'Strategy': row.get('Strategy', '15-Min ORB'),
+                        'P&L': net_pnl
+                    })
+        except Exception as e:
+            logging.error(f"Error fetching active trades for intraday curve: {e}")
+            
+    if not points:
+        return pd.DataFrame(columns=['Time', 'Ticker', 'Type', 'Strategy', 'P&L', 'Cumulative P&L'])
+        
+    df_curve = pd.DataFrame(points)
+    
+    # Parse timestamps
+    df_curve['Time_parsed'] = pd.to_datetime(df_curve['Time'])
+    
+    # Base starting point of the day: 9:15 AM
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    start_time_str = f"{today_str} 09:15"
+    
+    baseline = pd.DataFrame([{
+        'Time': start_time_str,
+        'Time_parsed': pd.to_datetime(start_time_str),
+        'Ticker': 'Start',
+        'Type': 'Start',
+        'Strategy': 'Start',
+        'P&L': 0.0
+    }])
+    
+    df_combined = pd.concat([baseline, df_curve], ignore_index=True)
+    df_combined = df_combined.sort_values('Time_parsed').reset_index(drop=True)
+    
+    # Aggregate by Time to merge concurrent/simultaneous trades (e.g. active positions at the same time)
+    df_aggregated = df_combined.groupby('Time').agg({
+        'Time_parsed': 'first',
+        'P&L': 'sum',
+        'Ticker': lambda x: ", ".join(x.unique()),
+        'Strategy': lambda x: ", ".join(x.unique()),
+        'Type': lambda x: ", ".join(x.unique())
+    }).reset_index().sort_values('Time_parsed').reset_index(drop=True)
+    
+    # Calculate Cumulative P&L
+    df_aggregated['Cumulative P&L'] = df_aggregated['P&L'].cumsum()
+    
+    return df_aggregated
+
+
+def get_swing_equity_curve(kite=None):
+    """
+    Computes the persistent lifetime Swing equity curve.
+    Combines archived closed swing trades and active swing trades.
+    Returns a DataFrame with columns: ['Date', 'Ticker', 'Type', 'P&L', 'Cumulative P&L']
+    """
+    points = []
+    
+    # 1. Closed/Archived Swing Trades (from SWING_ARCHIVE_FILE)
+    if os.path.exists(SWING_ARCHIVE_FILE):
+        try:
+            archive_df = pd.read_csv(SWING_ARCHIVE_FILE)
+            if not archive_df.empty:
+                for _, row in archive_df.iterrows():
+                    net_pnl = float(row.get('Net P&L', 0))
+                    
+                    # Retrieve or calculate Exit Date
+                    exit_date = row.get('ExitDate')
+                    if pd.isna(exit_date) or not exit_date:
+                        # Fallback calculation: EntryDate + Days Held
+                        entry_date_str = str(row.get('EntryDate', '')).split(' ')[0]
+                        try:
+                            entry_date = datetime.strptime(entry_date_str, "%Y-%m-%d")
+                            days_held = float(row.get('Days Held', 0))
+                            exit_date_parsed = entry_date + timedelta(days=int(days_held))
+                            exit_date = exit_date_parsed.strftime("%Y-%m-%d")
+                        except Exception as e:
+                            exit_date = entry_date_str if entry_date_str else datetime.now().strftime("%Y-%m-%d")
+                            
+                    points.append({
+                        'Date': exit_date,
+                        'Ticker': row.get('Ticker', 'Unknown'),
+                        'Type': 'Closed',
+                        'P&L': net_pnl
+                    })
+        except Exception as e:
+            logging.error(f"Error reading swing archive for equity curve: {e}")
+            
+    # 2. Active Swing Trades (from update_swing_portfolio)
+    if kite:
+        try:
+            swing_df = update_swing_portfolio(kite)
+            if not swing_df.empty:
+                active_swing = swing_df[swing_df['Status'] == 'OPEN']
+                for _, row in active_swing.iterrows():
+                    net_pnl = float(row.get('Net P&L', 0))
+                    today_str = datetime.now().strftime("%Y-%m-%d")
+                    points.append({
+                        'Date': today_str,
+                        'Ticker': row.get('Ticker', 'Unknown'),
+                        'Type': 'Active',
+                        'P&L': net_pnl
+                    })
+        except Exception as e:
+            logging.error(f"Error reading active swing trades for equity curve: {e}")
+            
+    if not points:
+        return pd.DataFrame(columns=['Date', 'Ticker', 'Type', 'P&L', 'Cumulative P&L'])
+        
+    df_curve = pd.DataFrame(points)
+    
+    df_curve['Date_parsed'] = pd.to_datetime(df_curve['Date'])
+    df_curve = df_curve.sort_values('Date_parsed').reset_index(drop=True)
+    
+    # Aggregate by Date to ensure one point per date
+    df_aggregated = df_curve.groupby('Date').agg({
+        'Date_parsed': 'first',
+        'P&L': 'sum',
+        'Ticker': lambda x: ", ".join(x.unique())
+    }).reset_index().sort_values('Date_parsed').reset_index(drop=True)
+    
+    # Prepend a baseline starting point
+    if not df_aggregated.empty:
+        first_date = df_aggregated.iloc[0]['Date_parsed']
+        baseline_date = first_date - timedelta(days=1)
+        baseline = pd.DataFrame([{
+            'Date': baseline_date.strftime("%Y-%m-%d"),
+            'Date_parsed': baseline_date,
+            'P&L': 0.0,
+            'Ticker': 'Baseline'
+        }])
+        df_aggregated = pd.concat([baseline, df_aggregated], ignore_index=True)
+        
+    df_aggregated['Cumulative P&L'] = df_aggregated['P&L'].cumsum()
+    
+    return df_aggregated
