@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.venv/
+.env/
+poetry.lock
+.pytest_cache/
+
+# Databases and Local State
+*.db
+*.csv
+*.json
+*.log
+*.png
+*.jpg
+*.jpeg
+
+# Git
+.git/
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db

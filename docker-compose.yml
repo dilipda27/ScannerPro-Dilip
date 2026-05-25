@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  # Streamlit Web App Dashboard Service
+  web:
+    build: .
+    container_name: scanner-web
+    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Kolkata # Sets the container timezone to Indian Standard Time (IST)
+
+  # Background Scanner & Scheduler Service
+  scheduler:
+    build: .
+    container_name: scanner-scheduler
+    command: python scheduler_service.py
+    volumes:
+      - .:/app
+    restart: unless-stopped
+    depends_on:
+      - web
+    environment:
+      - TZ=Asia/Kolkata # Sets the container timezone to Indian Standard Time (IST)
