@@ -10,7 +10,7 @@ import scanner
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-FAILED_CACHE_FILE = "failed_breakout_cache.csv"
+FAILED_CACHE_FILE = "fno_strength_cache.csv"
 
 def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
     """

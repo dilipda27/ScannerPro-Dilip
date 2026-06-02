@@ -10,7 +10,7 @@ import scanner
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-BULLISH_CACHE_FILE = "bullish_breakout_cache.csv"
+BULLISH_CACHE_FILE = "fno_strength_cache.csv"
 
 def cache_bullish_candidates(kite, progress_callback=None, refresh_only=False):
     """

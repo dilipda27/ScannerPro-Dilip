@@ -2,7 +2,10 @@ import pandas as pd
 import os
 import json
 import logging
+import threading
 from datetime import datetime, timedelta
+
+_trader_lock = threading.Lock()
 
 PORTFOLIO_FILE = "paper_portfolio.csv"
 HISTORY_FILE = "paper_trade_history.csv"
@@ -92,7 +95,7 @@ def get_portfolio():
     except:
         return pd.DataFrame(columns=["Ticker", "Type", "EntryPrice", "SL", "InitialSL", "Qty", "EntryTime", "Status", "Strategy"])
 
-def execute_paper_trade(ticker, trade_type, entry_price, sl, qty, token=None, strategy="15-Min ORB"):
+def execute_paper_trade(ticker, trade_type, entry_price, sl, qty, token=None, strategy="15-Min ORB", target=None):
     df = get_portfolio()
     
     # Check if already active in current session (avoid duplicate entries on same day)
@@ -106,6 +109,7 @@ def execute_paper_trade(ticker, trade_type, entry_price, sl, qty, token=None, st
         "EntryPrice": entry_price,
         "SL": sl,
         "InitialSL": sl,
+        "Target": target,
         "Qty": qty,
         "Token": token,
         "EntryTime": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -115,76 +119,93 @@ def execute_paper_trade(ticker, trade_type, entry_price, sl, qty, token=None, st
     
     df = pd.concat([df, pd.DataFrame([new_trade])], ignore_index=True)
     df.to_csv(PORTFOLIO_FILE, index=False)
-    logging.info(f"🚀 Paper Trade Executed: {trade_type} ({strategy}) {ticker} @ {entry_price} (SL: {sl}, Qty: {qty})")
+    logging.info(f"🚀 Paper Trade Executed: {trade_type} ({strategy}) {ticker} @ {entry_price} (SL: {sl}, Target: {target}, Qty: {qty})")
     return True
 
 def exit_trade(ticker, kite, override_price=None):
     """Exit a trade, calculate final P&L, and move to history."""
-    df = get_portfolio()
-    if df.empty:
-        return False
-    
-    trade_row = df[(df['Ticker'] == ticker) & (df['Status'] == 'Active')]
-    if trade_row.empty:
-        return False
+    with _trader_lock:
+        df = get_portfolio()
+        if df.empty:
+            return False
         
-    try:
-        # Fetch Exit Price
-        if override_price is not None:
-            exit_price = override_price
-        else:
-            quote = kite.ltp([f"NSE:{ticker}"])
-            exit_price = quote.get(f"NSE:{ticker}", {}).get('last_price')
-        
-        if exit_price is None:
-            logging.error(f"Could not fetch exit price for {ticker}")
+        # Verify the trade is still active (prevents duplicate exits due to race conditions)
+        trade_row = df[(df['Ticker'] == ticker) & (df['Status'] == 'Active')]
+        if trade_row.empty:
+            logging.warning(f"⚠️ exit_trade: Ticker {ticker} is not Active or already closed. Skipping exit.")
             return False
             
-        trade = trade_row.iloc[0].to_dict()
-        sl = trade.get('SL', 0)
-        
-        # Adjust Exit Price if SL was hit (use SL price as benchmark)
-        actual_exit_price = exit_price
-        if "Bullish" in str(trade['Type']) and sl > 0 and exit_price <= sl:
-            actual_exit_price = sl
-        elif "Bearish" in str(trade['Type']) and sl > 0 and exit_price >= sl:
-            actual_exit_price = sl
+        try:
+            # Fetch Exit Price
+            if override_price is not None:
+                exit_price = override_price
+            else:
+                quote = kite.ltp([f"NSE:{ticker}"])
+                exit_price = quote.get(f"NSE:{ticker}", {}).get('last_price')
             
-        trade['ExitPrice'] = actual_exit_price
-        trade['ExitTime'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-        trade['Capital Deployed'] = trade['EntryPrice'] * trade['Qty']
-        
-        if "Bullish" in str(trade['Type']):
-            trade['Final P&L'] = (actual_exit_price - trade['EntryPrice']) * trade['Qty']
-        else:
-            trade['Final P&L'] = (trade['EntryPrice'] - actual_exit_price) * trade['Qty']
+            if exit_price is None:
+                logging.error(f"Could not fetch exit price for {ticker}")
+                return False
+                
+            trade = trade_row.iloc[0].to_dict()
+            sl = trade.get('SL', 0)
             
-        trade['P&L %'] = (trade['Final P&L'] / trade['Capital Deployed']) * 100
-        trade['Status'] = 'CLOSED'
-        
-        # Save to History
-        history_df = pd.DataFrame([trade])
-        if os.path.exists(HISTORY_FILE):
-            try:
-                existing_history = pd.read_csv(HISTORY_FILE)
-                combined_history = pd.concat([existing_history, history_df], ignore_index=True, sort=False)
-                combined_history.to_csv(HISTORY_FILE, index=False)
-            except Exception as read_err:
-                logging.warning(f"Error appending history: {read_err}. Overwriting.")
+            # Adjust Exit Price if SL was hit (use SL price as benchmark)
+            actual_exit_price = exit_price
+            if "Bullish" in str(trade['Type']) and sl > 0 and exit_price <= sl:
+                actual_exit_price = sl
+            elif "Bearish" in str(trade['Type']) and sl > 0 and exit_price >= sl:
+                actual_exit_price = sl
+                
+            trade['ExitPrice'] = actual_exit_price
+            trade['ExitTime'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            trade['Capital Deployed'] = trade['EntryPrice'] * trade['Qty']
+            
+            if "Bullish" in str(trade['Type']):
+                trade['Final P&L'] = (actual_exit_price - trade['EntryPrice']) * trade['Qty']
+            else:
+                trade['Final P&L'] = (trade['EntryPrice'] - actual_exit_price) * trade['Qty']
+                
+            trade['P&L %'] = (trade['Final P&L'] / trade['Capital Deployed']) * 100
+            trade['Status'] = 'CLOSED'
+            
+            # Save to History (with duplicate checking to prevent multiple entries)
+            history_df = pd.DataFrame([trade])
+            if os.path.exists(HISTORY_FILE):
+                try:
+                    existing_history = pd.read_csv(HISTORY_FILE)
+                    
+                    # Prevent writing duplicate records for the same ticker and entry time
+                    is_duplicate = False
+                    if not existing_history.empty:
+                        matching = existing_history[
+                            (existing_history['Ticker'] == trade['Ticker']) & 
+                            (existing_history['EntryTime'] == trade['EntryTime'])
+                        ]
+                        if not matching.empty:
+                            is_duplicate = True
+                            
+                    if not is_duplicate:
+                        combined_history = pd.concat([existing_history, history_df], ignore_index=True, sort=False)
+                        combined_history.to_csv(HISTORY_FILE, index=False)
+                    else:
+                        logging.warning(f"⚠️ exit_trade: Duplicate entry for {trade['Ticker']} (Entry: {trade['EntryTime']}) already exists in history. Skipping history append.")
+                except Exception as read_err:
+                    logging.warning(f"Error appending history: {read_err}. Overwriting.")
+                    history_df.to_csv(HISTORY_FILE, index=False)
+            else:
                 history_df.to_csv(HISTORY_FILE, index=False)
-        else:
-            history_df.to_csv(HISTORY_FILE, index=False)
+                
+            # Update status and exit price in portfolio file instead of removing
+            df.loc[(df['Ticker'] == ticker) & (df['Status'] == 'Active'), 'Current Price'] = actual_exit_price
+            df.loc[(df['Ticker'] == ticker) & (df['Status'] == 'Active'), 'Status'] = 'Closed'
+            df.to_csv(PORTFOLIO_FILE, index=False)
             
-        # Update status and exit price in portfolio file instead of removing
-        df.loc[(df['Ticker'] == ticker) & (df['Status'] == 'Active'), 'Current Price'] = actual_exit_price
-        df.loc[(df['Ticker'] == ticker) & (df['Status'] == 'Active'), 'Status'] = 'Closed'
-        df.to_csv(PORTFOLIO_FILE, index=False)
-        
-        logging.info(f"🚪 Paper Trade Closed & Archived: {ticker} @ {exit_price}")
-        return True
-    except Exception as e:
-        logging.error(f"Error exiting trade {ticker}: {e}")
-        return False
+            logging.info(f"🚪 Paper Trade Closed & Archived: {ticker} @ {exit_price}")
+            return True
+        except Exception as e:
+            logging.error(f"Error exiting trade {ticker}: {e}")
+            return False
 
 def get_history():
     """Fetch archived trades history."""
@@ -381,18 +402,41 @@ def update_portfolio_pnl(kite):
                     logging.info(f"🛡️ Multi-Stage Trail: {row['Ticker']} Stop-Loss moved from ₹{current_sl:.2f} to ₹{new_sl:.2f} (Entry: ₹{entry:.2f}, LTP: ₹{ltp:.2f})")
 
             is_hit = False
+            exit_reason = "SL Hit"
             sl = row['SL']
+            target = row.get('Target')
+            
+            # 1. Check Stop Loss
             if "Bullish" in str(row['Type']) and row['Current Price'] is not None and row['Current Price'] <= sl:
                 is_hit = True
+                exit_reason = "SL Hit"
             elif "Bearish" in str(row['Type']) and row['Current Price'] is not None and row['Current Price'] >= sl:
                 is_hit = True
+                exit_reason = "SL Hit"
+                
+            # 2. Check Target (if defined in portfolio records)
+            elif target is not None and pd.notna(target):
+                target = float(target)
+                if "Bullish" in str(row['Type']) and row['Current Price'] is not None and row['Current Price'] >= target:
+                    is_hit = True
+                    exit_reason = "Target Hit"
+                elif "Bearish" in str(row['Type']) and row['Current Price'] is not None and row['Current Price'] <= target:
+                    is_hit = True
+                    exit_reason = "Target Hit"
             
             if is_hit:
-                logging.info(f"🚨 SL Hit for {row['Ticker']}. Auto-exiting at {sl}")
-                exit_trade(row['Ticker'], kite, override_price=sl)
-                processed_df.at[idx, 'SL Status'] = "❌ SL HIT (EXITED)"
-                processed_df.at[idx, 'Status'] = "Closed"
-                processed_df.at[idx, 'Current Price'] = sl
+                if exit_reason == "Target Hit":
+                    logging.info(f"🎯 Target Hit for {row['Ticker']}. Auto-exiting at ₹{target:.2f}")
+                    exit_trade(row['Ticker'], kite, override_price=target)
+                    processed_df.at[idx, 'SL Status'] = "🎯 TARGET HIT (EXITED)"
+                    processed_df.at[idx, 'Status'] = "Closed"
+                    processed_df.at[idx, 'Current Price'] = target
+                else:
+                    logging.info(f"🚨 SL Hit for {row['Ticker']}. Auto-exiting at ₹{sl:.2f}")
+                    exit_trade(row['Ticker'], kite, override_price=sl)
+                    processed_df.at[idx, 'SL Status'] = "❌ SL HIT (EXITED)"
+                    processed_df.at[idx, 'Status'] = "Closed"
+                    processed_df.at[idx, 'Current Price'] = sl
 
 
         # --- ESTIMATED ZERODHA INTRADAY CHARGES ---
@@ -492,12 +536,13 @@ def update_swing_portfolio(kite):
         def get_price_data(ticker):
             q = ohlc_quotes.get(f"NSE:{ticker}")
             if q:
-                return q['last_price'], q['ohlc']['close']
-            return None, None
+                return q['last_price'], q['ohlc']['close'], q['ohlc'].get('open')
+            return None, None, None
             
         price_info = open_trades['Ticker'].apply(get_price_data)
         open_trades['Current Price'] = [p[0] for p in price_info]
         open_trades['Prev Close'] = [p[1] for p in price_info]
+        open_trades['Open Price'] = [p[2] for p in price_info]
         
         # Get the actual 'Last Trading Day' from the market data itself
         # This prevents issues when running the dashboard on weekends
@@ -566,14 +611,21 @@ def update_swing_portfolio(kite):
             exit_triggered = False
             exit_price = row['Current Price']
             new_status = row['Status']
+            open_price = row.get('Open Price')
             
             if row['Current Price'] >= row['Target']:
                 new_status = "TARGET HIT"
-                exit_price = row['Target']
+                if open_price is not None and open_price >= row['Target']:
+                    exit_price = open_price
+                else:
+                    exit_price = row['Target']
                 exit_triggered = True
             elif row['Current Price'] <= row['SL']:
                 new_status = "SL HIT"
-                exit_price = row['SL']
+                if open_price is not None and open_price <= row['SL']:
+                    exit_price = open_price
+                else:
+                    exit_price = row['SL']
                 exit_triggered = True
                 
             if exit_triggered:
@@ -609,15 +661,15 @@ def update_swing_portfolio(kite):
                 new_sl = current_sl
                 
                 if ret_pct >= 10.0:
-                    new_sl = entry * 1.05
+                    new_sl = round(entry * 1.05, 2)
                 elif ret_pct >= 6.0:
-                    new_sl = entry * 1.02
+                    new_sl = round(entry * 1.02, 2)
                 elif ret_pct >= 3.0:
-                    new_sl = entry
+                    new_sl = round(entry, 2)
                 
                 if new_sl > current_sl:
-                    df.loc[df['Ticker'] == row['Ticker'], 'SL'] = round(new_sl, 2)
-                    open_trades.loc[idx, 'SL'] = round(new_sl, 2)
+                    df.loc[df['Ticker'] == row['Ticker'], 'SL'] = new_sl
+                    open_trades.loc[idx, 'SL'] = new_sl
                     logging.info(f"🛡️ Trailing SL Updated for {row['Ticker']}: {current_sl} -> {new_sl} ({ret_pct:.1f}% gain)")
 
         # Update df with all calculated columns from open_trades

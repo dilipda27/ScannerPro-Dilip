@@ -110,11 +110,26 @@ def send_portfolio_report(portfolio_df: pd.DataFrame, bot_token: str, chat_id: s
     if active_df.empty:
         return
         
-    total_pnl = active_df['Live P&L'].sum()
+    # Calculate Net Live P&L of active positions
+    net_live_pnl = active_df['Net P&L'].sum() if 'Net P&L' in active_df.columns else active_df['Live P&L'].sum()
+    
+    # Calculate Total Realized P&L from history
+    total_realized_pnl = 0.0
+    try:
+        import paper_trader
+        history_df = paper_trader.get_history()
+        if not history_df.empty and 'Final P&L' in history_df.columns:
+            total_realized_pnl = history_df['Final P&L'].sum()
+    except Exception as e:
+        logging.warning(f"Could not read realized P&L history: {e}")
+        
+    total_pnl = net_live_pnl + total_realized_pnl
     total_capital = (active_df['EntryPrice'] * active_df['Qty']).sum()
     total_roi = (total_pnl / total_capital * 100) if total_capital > 0 else 0
     
     header = "📊 *Current Portfolio Summary*\n"
+    header += f"Net Live P&L: ₹{net_live_pnl:,.2f}\n"
+    header += f"Realized P&L: ₹{total_realized_pnl:,.2f}\n"
     header += f"Total P&L: *₹{total_pnl:,.2f}* ({total_roi:.2f}%)\n"
     header += f"Active Positions: {len(active_df)}\n\n"
     

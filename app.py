@@ -342,7 +342,8 @@ if st.session_state.get('kite_access_token'):
             if start_time <= current_time <= end_time and has_open_positions:
                 import telegram_agent
                 tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
-                tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', getattr(config, 'TELEGRAM_CHAT_ID', ''))
+                # Prioritize personal private chat ID for P&L reports if configured
+                tel_chat_id = getattr(config, 'TELEGRAM_PERSONAL_CHAT_ID', '') or getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', getattr(config, 'TELEGRAM_CHAT_ID', ''))
                 
                 if tel_token and tel_chat_id:
                     if telegram_agent.send_portfolio_report(portfolio_df, tel_token, tel_chat_id):
@@ -883,6 +884,41 @@ if st.session_state.get('kite_access_token'):
     st.session_state.mon_bullish = st.sidebar.toggle("Bullish Breakout Monitor", value=st.session_state.mon_bullish)
     st.session_state.mon_failed_breakout = st.sidebar.toggle("Failed Breakout Short Monitor", value=st.session_state.mon_failed_breakout)
     
+    # Persistent VCP (Volatility Contraction) Sidebar Toggle
+    import volatility_contraction_scanner
+    vcp_monitor_state = volatility_contraction_scanner.is_live_monitor_running()
+    mon_vcp_toggle = st.sidebar.toggle("Volatility Contraction Monitor", value=vcp_monitor_state)
+    
+    if mon_vcp_toggle != vcp_monitor_state:
+        if mon_vcp_toggle:
+            # Attempt to start VCP Monitor dynamically
+            watchlist = {}
+            if os.path.exists("volatility_contraction_watchlist.json"):
+                try:
+                    with open("volatility_contraction_watchlist.json", "r") as f:
+                        raw_watchlist = json.load(f)
+                    # Convert keys back to integers for WebSocket/instrument token compatibility
+                    watchlist = {int(k): v for k, v in raw_watchlist.items()}
+                except Exception as json_err:
+                    st.sidebar.error(f"Error loading VCP watchlist: {json_err}")
+                    
+            if not watchlist:
+                st.sidebar.error("⚠️ Watchlist is empty. Run Volatility Contraction Stage 1 & 2 first.")
+            else:
+                kite = KiteConnect(api_key=api_key)
+                kite.set_access_token(st.session_state.kite_access_token)
+                success, msg = volatility_contraction_scanner.start_live_monitor(kite, watchlist)
+                if success:
+                    st.toast("📡 Volatility Contraction Monitor started successfully!", icon="🟢")
+                    st.rerun()
+                else:
+                    st.sidebar.error(msg)
+        else:
+            # Stop VCP Monitor
+            volatility_contraction_scanner.stop_live_monitor()
+            st.toast("Stopped background Volatility Contraction monitor.", icon="🛑")
+            st.rerun()
+            
     # Persistent Toggle for AI Active Positions Advisor
     import ai_advisor
     ai_advisor_state = ai_advisor.is_ai_advisor_enabled()
@@ -902,8 +938,9 @@ if st.session_state.get('kite_access_token'):
         if not is_within_window:
             st.sidebar.warning("⚠️ AI Advisor is active but currently outside market hours (9:45 AM - 3:25 PM Weekdays). It will analyze your positions once active.")
     
-    if st.session_state.mon_orb or st.session_state.mon_52w or st.session_state.mon_bearish or st.session_state.mon_bullish or st.session_state.mon_vwap_rejection or st.session_state.mon_failed_breakout or ai_advisor_toggle:
-        st.sidebar.success("Live Monitoring ACTIVE")
+    vcp_active = volatility_contraction_scanner.is_live_monitor_running()
+    if st.session_state.mon_orb or st.session_state.mon_52w or st.session_state.mon_bearish or st.session_state.mon_bullish or st.session_state.mon_vwap_rejection or st.session_state.mon_failed_breakout or vcp_active or ai_advisor_toggle:
+        st.sidebar.success("Live Automation ACTIVE")
         if st.sidebar.button("⏹️ Stop All Monitors"):
             st.session_state.mon_orb = False
             st.session_state.mon_52w = False
@@ -911,6 +948,7 @@ if st.session_state.get('kite_access_token'):
             st.session_state.mon_vwap_rejection = False
             st.session_state.mon_bullish = False
             st.session_state.mon_failed_breakout = False
+            volatility_contraction_scanner.stop_live_monitor()
             ai_advisor.set_ai_advisor_enabled(False)
             st.session_state.last_ai_advisor_run = None
             st.rerun()
@@ -952,7 +990,6 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.header("🎯 Strategy Control Center")
 
-# Strategy Categories
 KITE_STRATEGIES = [
     "15-Min ORB Breakout (Kite)", 
     "52-Week High Breakout (Kite)", 
@@ -961,8 +998,10 @@ KITE_STRATEGIES = [
     "Failed Breakout Short (Kite)",
     "3:15 PM Swing Setup (Kite)",
     "EOD Long Swing Setup (Kite)",
-    "Multi-Year Breakout (Kite)"
+    "Multi-Year Breakout (Kite)",
+    "Volatility Contraction Scanner (Kite)"
 ]
+
 YF_STRATEGIES = ["Swing Trade Candidates", "Volume Breakout Stocks"]
 
 selected_strategies = st.sidebar.multiselect(
@@ -986,8 +1025,8 @@ cache_files = {
     "15-Min ORB Breakout (Kite)": "orb_trending_cache.csv",
     "52-Week High Breakout (Kite)": "high52_cache.csv",
     "15-Min Bearish Breakdown (Kite)": "bearish_breakdown_cache.csv",
-    "15-Min Bullish Breakout (Kite)": "bullish_breakout_cache.csv",
-    "Failed Breakout Short (Kite)": "failed_breakout_cache.csv"
+    "15-Min Bullish Breakout (Kite)": "fno_strength_cache.csv",
+    "Failed Breakout Short (Kite)": "fno_strength_cache.csv"
 }
 
 for s in selected_strategies:
@@ -1011,6 +1050,8 @@ if any(s in KITE_STRATEGIES for s in selected_strategies):
             kite = KiteConnect(api_key=api_key)
             kite.set_access_token(st.session_state.kite_access_token)
             
+            fno_strength_cached = False
+            
             for s in selected_strategies:
                 if s == "15-Min ORB Breakout (Kite)":
                     st.info(f"🔄 Caching ORB...")
@@ -1028,16 +1069,37 @@ if any(s in KITE_STRATEGIES for s in selected_strategies):
                     import bearish_breakdown_scanner
                     bearish_breakdown_scanner.cache_bearish_candidates(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t), refresh_only=refresh_bearish)
                     p_bar.empty()
-                elif s == "15-Min Bullish Breakout (Kite)":
-                    st.info(f"🔄 Caching Bullish...")
+                elif s in ["15-Min Bullish Breakout (Kite)", "Failed Breakout Short (Kite)"]:
                     p_bar = st.progress(0)
-                    bullish_breakout_scanner.cache_bullish_candidates(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t), refresh_only=refresh_bullish)
-                    p_bar.empty()
-                elif s == "Failed Breakout Short (Kite)":
-                    st.info(f"🔄 Caching Failed Breakout...")
-                    p_bar = st.progress(0)
-                    import failed_breakout_scanner
-                    failed_breakout_scanner.cache_failed_candidates(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t), refresh_only=refresh_failed)
+                    # Case 1: Full Scan (neither refresh checkbox is checked)
+                    if not refresh_bullish and not refresh_failed:
+                        if not fno_strength_cached:
+                            st.info(f"🔄 Running Full F&O Strength Cache Scan...")
+                            bullish_breakout_scanner.cache_bullish_candidates(
+                                kite, 
+                                progress_callback=lambda p, t, sym: p_bar.progress(p/t), 
+                                refresh_only=False
+                            )
+                            fno_strength_cached = True
+                        else:
+                            st.info(f"🔄 F&O Strength Cache already built (shared). Skipping duplicate full scan.")
+                    # Case 2: Refresh Scan (at least one refresh checkbox is checked)
+                    else:
+                        if s == "15-Min Bullish Breakout (Kite)" and refresh_bullish:
+                            st.info(f"🔄 Refreshing Cache for Bullish Breakout...")
+                            bullish_breakout_scanner.cache_bullish_candidates(
+                                kite, 
+                                progress_callback=lambda p, t, sym: p_bar.progress(p/t), 
+                                refresh_only=True
+                            )
+                        elif s == "Failed Breakout Short (Kite)" and refresh_failed:
+                            st.info(f"🔄 Refreshing Cache for Failed Breakout Short...")
+                            import failed_breakout_scanner
+                            failed_breakout_scanner.cache_failed_candidates(
+                                kite, 
+                                progress_callback=lambda p, t, sym: p_bar.progress(p/t), 
+                                refresh_only=True
+                            )
                     p_bar.empty()
             
             st.success("✅ Bulk Caching Complete!")
@@ -1281,7 +1343,7 @@ if st.button(f"Run Scan: {strategy}", type="primary"):
             tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
             
             # Determine appropriate chat ID based on strategy
-            if strategy in ["15-Min Bearish Breakdown (Kite)", "15-Min Bullish Breakout (Kite)"]:
+            if strategy in ["15-Min Bearish Breakdown (Kite)", "15-Min Bullish Breakout (Kite)", "15-Min ORB Breakout (Kite)", "Volatility Contraction Scanner (Kite)"]:
                 tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', '')
             else:
                 tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID', '')
@@ -1299,12 +1361,14 @@ if st.button(f"Run Scan: {strategy}", type="primary"):
 
 # --- MULTI-STRATEGY LIVE MONITOR LOOP ---
 import ai_advisor
+import volatility_contraction_scanner
 any_active = (
     st.session_state.get('mon_orb') or 
     st.session_state.get('mon_52w') or 
     st.session_state.get('mon_bearish') or 
     st.session_state.get('mon_bullish') or 
     st.session_state.get('mon_vwap_rejection') or
+    volatility_contraction_scanner.is_live_monitor_running() or
     ai_advisor.is_ai_advisor_enabled()
 )
 
@@ -1349,7 +1413,8 @@ if any_active and st.session_state.get('kite_access_token'):
                             msg = telegram_agent.format_signal_message(row, "ORB Breakout")
                             # Fetch 2 days of 5m data for chart (resampled to 15m later)
                             df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
-                            telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID, "ORB Breakout", row_data=row)
+                            tel_chat_id_intraday = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
+                            telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, tel_chat_id_intraday, "ORB Breakout", row_data=row)
                         st.toast(f"🔥 {len(new_orb)} New ORB Breakouts!", icon="🚀")
                         
                         for _, row in new_orb.iterrows():
@@ -1668,15 +1733,181 @@ if any_active and st.session_state.get('kite_access_token'):
                         st.success("🤖 AI Advisor recommendations successfully analyzed and dispatched to Telegram!")
                     except Exception as ai_err:
                         st.error(f"Failed to run AI Position Advisor: {ai_err}")
-
-    import time
-    time.sleep(60) # Reduced to 60 seconds for more realistic intraday monitoring
-    st.rerun()
-
 # --- PERSISTENT STRATEGY-SPECIFIC RESULTS DISPLAY ---
-current_results = st.session_state.all_results.get(strategy, pd.DataFrame())
+current_results = st.session_state.all_results.get(strategy, pd.DataFrame()) if strategy else pd.DataFrame()
 
-if not current_results.empty:
+# --- VOLATILITY CONTRACTION SCANNER CUSTOM DASHBOARD PAGE ---
+if strategy == "Volatility Contraction Scanner (Kite)":
+    st.markdown("---")
+    st.markdown("<h2 style='color:#3b82f6; font-weight:700;'>📡 Volatility Contraction Stock Scanner</h2>", unsafe_allow_html=True)
+    st.markdown("""
+        This strategy screens liquid Nifty 500 stocks trading within 3% of their 20-day high/low boundaries, 
+        confirms volatility contraction (consolidation phase) via 5-day vs 14-day ATR, 
+        and monitors breakouts/breakdowns in real-time via WebSocket.
+    """)
+    
+    # 3-Column Control Panel with clearly marked ideal times
+    col1, col2, col3 = st.columns(3)
+    
+    import volatility_contraction_scanner
+    
+    with col1:
+        st.markdown("""
+        <div style='background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; min-height: 250px; box-shadow: 0 4px 6px rgba(0,0,0,0.02);'>
+            <h4 style='color:#1e293b; font-weight:600; margin-top:0;'>1️⃣ Stage 1: Proximity Screen</h4>
+            <p style='font-size:0.8rem; color:#f59e0b; font-weight:bold; margin: 4px 0;'>⚠️ Ideal Time: After Market Close or Pre-Market (9:00 - 9:15 AM)</p>
+            <p style='font-size:0.8rem; color:#64748b;'>Filters the Nifty 500 universe for liquid stocks trading near their 20-day high (Resistance) or 20-day low (Support).</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("<div style='margin-top: -50px; padding: 0 20px 20px 20px;'>", unsafe_allow_html=True)
+        if st.button("🚀 Run Stage 1 Scan", use_container_width=True, key="run_stage_1_btn"):
+            if not st.session_state.kite_access_token:
+                st.error("🔒 Please log in first.")
+            else:
+                with st.spinner("Screening Nifty 500 universe..."):
+                    try:
+                        kite = KiteConnect(api_key=api_key)
+                        kite.set_access_token(st.session_state.kite_access_token)
+                        symbols = volatility_contraction_scanner.fetch_nifty500_symbols()
+                        shortlist = volatility_contraction_scanner.run_stage1_proximity_filter(kite, symbols)
+                        st.success(f"Stage 1 Complete! Cached {len(shortlist)} stocks.")
+                        st.toast("Stage 1 screening finished!", icon="✅")
+                    except Exception as e:
+                        st.error(f"Stage 1 Error: {e}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("""
+        <div style='background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; min-height: 250px; box-shadow: 0 4px 6px rgba(0,0,0,0.02);'>
+            <h4 style='color:#1e293b; font-weight:600; margin-top:0;'>2️⃣ Stage 2: Volatility Check</h4>
+            <p style='font-size:0.8rem; color:#f59e0b; font-weight:bold; margin: 4px 0;'>⚠️ Ideal Time: Pre-Market (9:10 - 9:15 AM) after caching</p>
+            <p style='font-size:0.8rem; color:#64748b;'>Validates EOD candidates for Volatility Contraction phase (5-day Wilder's ATR is less than 14-day ATR).</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("<div style='margin-top: -50px; padding: 0 20px 20px 20px;'>", unsafe_allow_html=True)
+        if st.button("🔥 Run Stage 2 Validation", use_container_width=True, key="run_stage_2_btn"):
+            if not st.session_state.kite_access_token:
+                st.error("🔒 Please log in first.")
+            else:
+                with st.spinner("Analyzing volatility contraction setups..."):
+                    try:
+                        kite = KiteConnect(api_key=api_key)
+                        kite.set_access_token(st.session_state.kite_access_token)
+                        watchlist = volatility_contraction_scanner.run_stage2_setup_validation(kite)
+                        st.success(f"Stage 2 Complete! Validated {len(watchlist)} stocks in contraction phase.")
+                        st.toast("Stage 2 validation finished!", icon="🔥")
+                    except Exception as e:
+                        st.error(f"Stage 2 Error: {e}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col3:
+        is_running = volatility_contraction_scanner.is_live_monitor_running()
+        status_label = "<span style='color:#10b981; font-weight:bold;'>🟢 Streaming (Connected)</span>" if is_running else "<span style='color:#ef4444; font-weight:bold;'>🔴 Offline (Stopped)</span>"
+        
+        st.markdown(f"""
+        <div style='background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; min-height: 250px; box-shadow: 0 4px 6px rgba(0,0,0,0.02);'>
+            <h4 style='color:#1e293b; font-weight:600; margin-top:0;'>3️⃣ Stage 3: Live Monitor</h4>
+            <p style='font-size:0.8rem; color:#f59e0b; font-weight:bold; margin: 4px 0;'>⚠️ Ideal Time: Market Hours (9:15 AM - 3:30 PM)</p>
+            <p style='font-size:0.8rem; color:#64748b; margin-bottom:12px;'>Streams ticks in real-time and logs paper trades in your portfolio on triggers.</p>
+            <p style='font-size:0.85rem; color:#1e293b;'><b>Status:</b> {status_label}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("<div style='margin-top: -50px; padding: 0 20px 20px 20px;'>", unsafe_allow_html=True)
+        if is_running:
+            if st.button("🛑 Stop Live Monitor", type="primary", use_container_width=True, key="stop_stage_3_btn"):
+                volatility_contraction_scanner.stop_live_monitor()
+                st.toast("Stopped background WebSocket monitor.", icon="⏹️")
+                st.rerun()
+        else:
+            if st.button("▶️ Start Live Monitor", type="primary", use_container_width=True, key="start_stage_3_btn"):
+                if not st.session_state.kite_access_token:
+                    st.error("🔒 Please log in first.")
+                else:
+                    with st.spinner("Starting WebSocket connection..."):
+                        try:
+                            kite = KiteConnect(api_key=api_key)
+                            kite.set_access_token(st.session_state.kite_access_token)
+                            
+                            watchlist = {}
+                            if os.path.exists("volatility_contraction_watchlist.json"):
+                                with open("volatility_contraction_watchlist.json", "r") as f:
+                                    raw_watchlist = json.load(f)
+                                # Convert keys back to integers for WebSocket/instrument token compatibility
+                                watchlist = {int(k): v for k, v in raw_watchlist.items()}
+                                
+                            if not watchlist:
+                                st.warning("⚠️ Watchlist is empty or not found. Please click 'Run Stage 2 Validation' first.")
+                            else:
+                                success, msg = volatility_contraction_scanner.start_live_monitor(kite, watchlist)
+                                if success:
+                                    st.success(msg)
+                                    st.toast("WebSocket monitor started successfully!", icon="📡")
+                                else:
+                                    st.error(msg)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Stage 3 Error: {e}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- Render Results Stage-by-Stage ---
+    st.markdown("---")
+    res_col1, res_col2 = st.columns(2)
+    
+    with res_col1:
+        st.markdown("<h3 style='color:#1e293b; font-weight:600;'>📊 Stage 1 Filter Results</h3>", unsafe_allow_html=True)
+        if os.path.exists("proximity_filter_cache.json"):
+            try:
+                with open("proximity_filter_cache.json", "r") as f:
+                    cache_data = json.load(f)
+                if cache_data:
+                    df1 = pd.DataFrame(cache_data.values())
+                    # Display essential columns
+                    df1_disp = df1[["symbol", "latest_close", "resistance", "support", "volume_sma", "near_level"]].copy()
+                    df1_disp.columns = ["Ticker", "Latest Close", "20D High (R)", "20D Low (S)", "Volume SMA", "Near Level"]
+                    st.dataframe(df1_disp.style.format({
+                        "Latest Close": "₹{:.2f}",
+                        "20D High (R)": "₹{:.2f}",
+                        "20D Low (S)": "₹{:.2f}",
+                        "Volume SMA": "{:,.0f}"
+                    }), use_container_width=True)
+                else:
+                    st.info("Stage 1 cache is currently empty.")
+            except Exception as e:
+                st.error(f"Could not load Stage 1 results: {e}")
+        else:
+            st.info("No Stage 1 results cached yet. Click 'Run Stage 1 Scan' above to evaluate stocks.")
+
+    with res_col2:
+        st.markdown("<h3 style='color:#1e293b; font-weight:600;'>📊 Stage 2 Watchlist Results</h3>", unsafe_allow_html=True)
+        # Load from Stage 2 validation watchlist JSON file
+        if os.path.exists("volatility_contraction_watchlist.json"):
+            try:
+                with open("volatility_contraction_watchlist.json", "r") as f:
+                    watchlist = json.load(f)
+                if watchlist:
+                    df2_data = []
+                    for tok_str, val in watchlist.items():
+                        df2_data.append({
+                            "Ticker": val["symbol"],
+                            "Trigger Buy (20D High)": val["trigger_buy"],
+                            "Trigger Sell (20D Low)": val["trigger_sell"]
+                        })
+                    df2 = pd.DataFrame(df2_data)
+                    st.dataframe(df2.style.format({
+                        "Trigger Buy (20D High)": "₹{:.2f}",
+                        "Trigger Sell (20D Low)": "₹{:.2f}"
+                    }), use_container_width=True)
+                else:
+                    st.info("No candidates are currently contracting in volatility (ATR).")
+            except Exception as e:
+                st.error(f"Could not load Stage 2 results: {e}")
+        else:
+            st.info("No Stage 2 setups validated yet. Click 'Run Stage 2 Validation' above.")
+
+if strategy != "Volatility Contraction Scanner (Kite)" and not current_results.empty:
     st.success(f"Found {len(current_results)} stocks matching the {strategy} criteria!")
     
     # Add Chart Links and Sparklines to scan results
@@ -1836,7 +2067,7 @@ if not current_results.empty:
                 tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
                 
                 # Use strategy-specific chat ID for AI analysis too
-                if strategy in ["15-Min Bearish Breakdown (Kite)", "15-Min Bullish Breakout (Kite)", "Failed Breakout Short (Kite)"]:
+                if strategy in ["15-Min Bearish Breakdown (Kite)", "15-Min Bullish Breakout (Kite)", "Failed Breakout Short (Kite)", "15-Min ORB Breakout (Kite)", "Volatility Contraction Scanner (Kite)"]:
                     tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', '')
                 else:
                     tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID', '')
@@ -1863,3 +2094,9 @@ if not current_results.empty:
                         st.error("⚠️ Failed to send to Telegram.")
                 elif "Error:" in analysis:
                     st.warning("⚠️ AI analysis failed. Skipping Telegram infographic.")
+
+# --- GLOBAL AUTO-REFRESH TIMER FOR ACTIVE MONITORS ---
+if any_active and st.session_state.get('kite_access_token'):
+    import time
+    time.sleep(60) # Auto-refresh every 60 seconds
+    st.rerun()
