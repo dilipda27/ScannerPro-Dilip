@@ -213,11 +213,17 @@ def run_stage1_proximity_filter(kite, symbols_list):
             dist_res = abs(latest_close - resistance) / resistance
             dist_sup = abs(latest_close - support) / support
             
+            # Condition C: Volatility Contraction Pattern (VCP) consolidation width check
+            # The entire 20-day High to 20-day Low range must be tight (e.g. <= 12%)
+            # This ensures we filter out highly volatile stocks with wide ranges/huge resistance
+            range_width = (resistance - support) / support
+            is_range_tight = range_width <= 0.12
+            
             # Dominant trend confirmation filters:
             # - For Resistance proximity (Bullish Breakout): Price must be above daily EMA 50 AND RSI 14 > 50
             # - For Support proximity (Bearish Breakdown): Price must be below daily EMA 50 AND RSI 14 < 50
-            is_near_resistance = (dist_res <= 0.03) and (latest_close > ema_50) and (rsi_14 > 50)
-            is_near_support = (dist_sup <= 0.03) and (latest_close < ema_50) and (rsi_14 < 50)
+            is_near_resistance = is_range_tight and (dist_res <= 0.03) and (latest_close > ema_50) and (rsi_14 > 50)
+            is_near_support = is_range_tight and (dist_sup <= 0.03) and (latest_close < ema_50) and (rsi_14 < 50)
             
             if is_near_resistance or is_near_support:
                 shortlisted[str(token)] = {
@@ -319,9 +325,14 @@ def run_stage2_setup_validation(kite):
             volume_sma_5 = df['volume'].rolling(window=5).mean().iloc[-1]
             volume_sma_20 = df['volume'].rolling(window=20).mean().iloc[-1]
             is_volume_contracted = volume_sma_5 < volume_sma_20
+
+            # 3. Price Horizontal Squeeze: 5-day closing price range must be within 4% to ensure real tight accumulation
+            close_5d = df['close'].iloc[-5:]
+            price_spread_pct = (close_5d.max() - close_5d.min()) / close_5d.min() * 100
+            is_price_flat = price_spread_pct <= 4.0
             
-            # Setup Validation Criteria: 5-day ATR < 14-day ATR AND Tight Squeeze AND Volume dry-up
-            if (latest_atr_5 < latest_atr_14) and is_tight and is_volume_contracted:
+            # Setup Validation Criteria: 5-day ATR < 14-day ATR AND Tight Squeeze AND Volume dry-up AND Flat Closes
+            if (latest_atr_5 < latest_atr_14) and is_tight and is_volume_contracted and is_price_flat:
                 # Triggers are the 20-day rolling highs and lows calculated in Stage 1
                 watchlist[token] = {
                     "symbol": symbol,
@@ -329,12 +340,13 @@ def run_stage2_setup_validation(kite):
                     "trigger_sell": metadata["support"],     # Breakdown trigger (20-day low)
                     "atr_5": round(float(latest_atr_5), 2)
                 }
-                logging.info(f"🔥 VALIDATED: {symbol} - Volatility contracting (5-day ATR: ₹{latest_atr_5:.2f} < 14-day ATR: ₹{latest_atr_14:.2f} | ATR %: {atr_percent:.2f}% | Vol Squeeze: Yes)")
+                logging.info(f"🔥 VALIDATED: {symbol} - Volatility contracting (5-day ATR: ₹{latest_atr_5:.2f} < 14-day ATR: ₹{latest_atr_14:.2f} | ATR %: {atr_percent:.2f}% | 5D Close Range: {price_spread_pct:.2f}% | Vol Squeeze: Yes)")
             else:
                 reason = []
                 if latest_atr_5 >= latest_atr_14: reason.append("No ATR contraction")
-                if not is_tight: reason.append(f"Not tight enough ({atr_percent:.2f}%)")
+                if not is_tight: reason.append(f"ATR not tight enough ({atr_percent:.2f}%)")
                 if not is_volume_contracted: reason.append("No volume dry-up")
+                if not is_price_flat: reason.append(f"Closes too wide ({price_spread_pct:.2f}%)")
                 logging.info(f"❌ Filtered Out: {symbol} - {', '.join(reason)}")
                 
         except Exception as e:
@@ -447,6 +459,11 @@ class IntradayLiveMonitor:
 
     def on_ticks(self, ws, ticks):
         """WebSocket on_ticks callback. Evaluates real-time price updates against levels."""
+        # Enforce start time restriction: Do not trigger trades before 09:30 AM to filter out morning whipsaws
+        current_time = datetime.datetime.now().time()
+        if current_time < datetime.time(9, 30):
+            return
+
         with self._lock:
             for tick in ticks:
                 token = tick.get('instrument_token')
@@ -462,15 +479,30 @@ class IntradayLiveMonitor:
                 trigger_buy = metadata.get("trigger_buy")
                 trigger_sell = metadata.get("trigger_sell")
                 
-                # Fetch today's open from the tick data if available for intraday momentum verification
+                # Fetch today's open and previous day's close from the tick data for momentum & extension checks
                 tick_ohlc = tick.get('ohlc', {})
                 today_open = tick_ohlc.get('open')
+                prev_close = tick_ohlc.get('close')
                 
                 # --- A. Bullish Breakout Check ---
                 if trigger_buy is not None and last_price >= trigger_buy:
                     # Enforce that price must be above today's open to confirm positive intraday momentum
                     if today_open and last_price <= today_open:
                         continue # Skip false breakouts on negative intraday momentum
+                    
+                    # Prevent entering if the stock is already extended (e.g., > 5.5% gain on the day from previous close or open)
+                    if prev_close and prev_close > 0:
+                        day_gain_pct = (last_price - prev_close) / prev_close * 100
+                        if day_gain_pct > 5.5:
+                            logging.info(f"🚫 Skipping breakout for {symbol}: Stock is already up {day_gain_pct:.2f}% today (extended).")
+                            metadata["trigger_buy"] = None
+                            continue
+                    if today_open and today_open > 0:
+                        gain_from_open_pct = (last_price - today_open) / today_open * 100
+                        if gain_from_open_pct > 5.5:
+                            logging.info(f"🚫 Skipping breakout for {symbol}: Stock has run up {gain_from_open_pct:.2f}% from open today (extended).")
+                            metadata["trigger_buy"] = None
+                            continue
                         
                     self.log_trade("PAPER TRADE BUY (Breakout)", symbol, last_price)
                     
@@ -514,6 +546,20 @@ class IntradayLiveMonitor:
                     # Enforce that price must be below today's open to confirm negative intraday momentum
                     if today_open and last_price >= today_open:
                         continue # Skip false breakdowns on positive intraday momentum
+                        
+                    # Prevent entering if the stock is already extended (e.g., > 5.5% drop on the day from previous close or open)
+                    if prev_close and prev_close > 0:
+                        day_loss_pct = (prev_close - last_price) / prev_close * 100
+                        if day_loss_pct > 5.5:
+                            logging.info(f"🚫 Skipping breakdown for {symbol}: Stock is already down {day_loss_pct:.2f}% today (extended).")
+                            metadata["trigger_sell"] = None
+                            continue
+                    if today_open and today_open > 0:
+                        loss_from_open_pct = (today_open - last_price) / today_open * 100
+                        if loss_from_open_pct > 5.5:
+                            logging.info(f"🚫 Skipping breakdown for {symbol}: Stock has dropped {loss_from_open_pct:.2f}% from open today (extended).")
+                            metadata["trigger_sell"] = None
+                            continue
                         
                     self.log_trade("PAPER TRADE SELL (Breakdown)", symbol, last_price)
                     

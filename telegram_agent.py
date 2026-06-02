@@ -113,18 +113,13 @@ def send_portfolio_report(portfolio_df: pd.DataFrame, bot_token: str, chat_id: s
     # Calculate Net Live P&L of active positions
     net_live_pnl = active_df['Net P&L'].sum() if 'Net P&L' in active_df.columns else active_df['Live P&L'].sum()
     
-    # Calculate Total Realized P&L from history
-    total_realized_pnl = 0.0
-    try:
-        import paper_trader
-        history_df = paper_trader.get_history()
-        if not history_df.empty and 'Final P&L' in history_df.columns:
-            total_realized_pnl = history_df['Final P&L'].sum()
-    except Exception as e:
-        logging.warning(f"Could not read realized P&L history: {e}")
-        
+    # Calculate Total Realized P&L of closed positions from today's portfolio to match Streamlit
+    closed_df = portfolio_df[portfolio_df['Status'] == 'Closed'].copy()
+    total_realized_pnl = closed_df['Net P&L'].sum() if 'Net P&L' in closed_df.columns else closed_df['Live P&L'].sum()
+    
+    # Total P&L is the sum of active net P&L and realized net P&L (matches dashboard's total net P&L)
     total_pnl = net_live_pnl + total_realized_pnl
-    total_capital = (active_df['EntryPrice'] * active_df['Qty']).sum()
+    total_capital = (portfolio_df['EntryPrice'] * portfolio_df['Qty']).sum()
     total_roi = (total_pnl / total_capital * 100) if total_capital > 0 else 0
     
     header = "📊 *Current Portfolio Summary*\n"

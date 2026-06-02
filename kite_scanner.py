@@ -100,10 +100,22 @@ def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retrie
         except Exception as e:
             error_str = str(e).lower()
             
-            # Expanded network error detection
+            # Clean up the error message if it contains HTML (Cloudflare / 5xx responses) to prevent console pollution
+            display_error = str(e)
+            if "<html>" in error_str or "cloudflare" in error_str or "502" in error_str or "bad gateway" in error_str:
+                display_error = "[HTML Error Page (502 Bad Gateway / Cloudflare)]"
+                if "502" in error_str:
+                    display_error = "502 Bad Gateway (Cloudflare)"
+                elif "503" in error_str:
+                    display_error = "503 Service Unavailable (Cloudflare)"
+                elif "504" in error_str:
+                    display_error = "504 Gateway Timeout (Cloudflare)"
+            
+            # Expanded network error detection including gateway/server errors (5xx)
             is_network_error = any(keyword in error_str for keyword in [
                 "failed to resolve", "timeout", "connection", "disconnected", 
-                "network", "stream", "protocol", "ssl", "dns"
+                "network", "stream", "protocol", "ssl", "dns", "502", "503", "504",
+                "bad gateway", "service unavailable", "gateway timeout", "cloudflare"
             ])
             
             # Handle Rate Limiting (429) specifically if it appears
@@ -115,11 +127,11 @@ def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retrie
             if is_network_error and attempt < retries - 1:
                 # Exponential backoff with a bit of jitter: 3, 6, 12, 24...
                 wait_time = (2 ** (attempt + 1)) + (attempt * 2) 
-                logging.warning(f"Network error for token {instrument_token} (Attempt {attempt+1}/{retries}). Retrying in {wait_time}s... Error: {e}")
+                logging.warning(f"Network / Gateway error for token {instrument_token} (Attempt {attempt+1}/{retries}). Retrying in {wait_time}s... Error: {display_error}")
                 time.sleep(wait_time)
                 continue
                 
-            logging.error(f"Error fetching data for token {instrument_token}: {e}")
+            logging.error(f"Error fetching data for token {instrument_token}: {display_error}")
             return pd.DataFrame()
     return pd.DataFrame()
 
