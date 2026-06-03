@@ -117,7 +117,10 @@ def execute_paper_trade(ticker, trade_type, entry_price, sl, qty, token=None, st
         "Strategy": strategy
     }
     
-    df = pd.concat([df, pd.DataFrame([new_trade])], ignore_index=True)
+    if df.empty:
+        df = pd.DataFrame([new_trade])
+    else:
+        df = pd.concat([df, pd.DataFrame([new_trade])], ignore_index=True)
     df.to_csv(PORTFOLIO_FILE, index=False)
     logging.info(f"🚀 Paper Trade Executed: {trade_type} ({strategy}) {ticker} @ {entry_price} (SL: {sl}, Target: {target}, Qty: {qty})")
     return True
@@ -186,7 +189,10 @@ def exit_trade(ticker, kite, override_price=None):
                             is_duplicate = True
                             
                     if not is_duplicate:
-                        combined_history = pd.concat([existing_history, history_df], ignore_index=True, sort=False)
+                        if existing_history.empty:
+                            combined_history = history_df
+                        else:
+                            combined_history = pd.concat([existing_history, history_df], ignore_index=True, sort=False)
                         combined_history.to_csv(HISTORY_FILE, index=False)
                     else:
                         logging.warning(f"⚠️ exit_trade: Duplicate entry for {trade['Ticker']} (Entry: {trade['EntryTime']}) already exists in history. Skipping history append.")
@@ -493,7 +499,10 @@ def execute_swing_trade(ticker, entry_price, target, sl, qty, token=None):
         "Return %": 0.0
     }
     
-    df = pd.concat([df, pd.DataFrame([new_trade])], ignore_index=True)
+    if df.empty:
+        df = pd.DataFrame([new_trade])
+    else:
+        df = pd.concat([df, pd.DataFrame([new_trade])], ignore_index=True)
     df.to_csv(SWING_FILE, index=False)
     logging.info(f"📈 Positional Swing Trade Executed: {ticker} @ {entry_price} (Target: {target}, SL: {sl})")
     return True
