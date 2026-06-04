@@ -146,6 +146,22 @@ def scan_bullish_breakouts(kite, progress_callback=None):
         
     from_date_intra = to_date.replace(hour=9, minute=15, second=0, microsecond=0)
     
+    # --- BROAD MARKET TREND CHECK (NIFTY 50) ---
+    nifty_bullish = False
+    try:
+        nifty_token_map = kite_scanner.get_kite_instruments(kite, ["NIFTY 50"])
+        if nifty_token_map and "NIFTY 50" in nifty_token_map:
+            nifty_token = nifty_token_map["NIFTY 50"]
+            nifty_from = to_date.replace(hour=9, minute=15, second=0, microsecond=0)
+            nifty_df = kite_scanner.fetch_kite_data(kite, nifty_token, nifty_from, to_date, "5minute")
+            if not nifty_df.empty:
+                nifty_open = nifty_df.iloc[0]['open']
+                nifty_ltp = nifty_df.iloc[-1]['close']
+                nifty_bullish = nifty_ltp > nifty_open
+                logging.info(f"Broad Market Check -> Nifty Open: {nifty_open:.2f}, LTP: {nifty_ltp:.2f} | Bullish? {nifty_bullish}")
+    except Exception as ne:
+        logging.warning(f"Failed to fetch Nifty 50 trend: {ne}")
+
     total = len(cache_df)
     processed = 0
     
@@ -234,28 +250,70 @@ def scan_bullish_breakouts(kite, progress_callback=None):
             confirmed_close = confirmed_candle['close']
             
             # --- BULLISH CRITERIA ---
-            # 1. Volume Spike
+            # 1. Volume Spike (demand higher volume if market is bearish/volatile)
             first_15m_vol = or_candles['volume'].sum()
             avg_15m_vol = row['Avg_15m_Vol']
-            vol_spike = first_15m_vol > (1.2 * avg_15m_vol) if avg_15m_vol > 0 else True
+            vol_spike_multiplier = 1.2 if nifty_bullish else 1.8
+            vol_spike = first_15m_vol > (vol_spike_multiplier * avg_15m_vol) if avg_15m_vol > 0 else True
             
             # 2. Above VWAP
             vwap = calculate_vwap(df_today)
             above_vwap = ltp > vwap
             
-            # 3. BREAKOUT TRIGGER: 5-min close above both OR High and Yesterday High
+            # 3. BREAKOUT TRIGGER: 5-min close above both OR High and Yesterday High (with Retest Recovery confirmation)
             breakout_level = max(or_high, pdh)
-            is_breakout = confirmed_close > breakout_level
             
+            # Find the first breakout candle in df_today
+            bo_idx = -1
+            for idx in range(len(df_today)):
+                if df_today.iloc[idx]['close'] > breakout_level:
+                    bo_idx = idx
+                    break
+            
+            is_breakout = False
+            if bo_idx != -1:
+                confirmed_candle_idx = df_today.index.get_loc(confirmed_candle.name)
+                # Case 1: Fresh Breakout (within the immediate next candle of the breakout close)
+                if confirmed_candle_idx == bo_idx:
+                    is_breakout = True
+                else:
+                    # Case 2: Breakout of Retest
+                    # Look for a retest (low <= breakout_level) after the breakout candle
+                    has_retested = False
+                    re_idx = -1
+                    for idx in range(bo_idx + 1, len(df_today)):
+                        if df_today.iloc[idx]['low'] <= breakout_level:
+                            has_retested = True
+                            re_idx = idx
+                    
+                    if has_retested:
+                        # Recovery: current price is back above breakout_level,
+                        # and either previous candle closed below it, or the retest was very recent.
+                        prev_close = df_today.iloc[-2]['close'] if len(df_today) > 1 else ltp
+                        retest_is_recent = (len(df_today) - 1 - re_idx) <= 2
+                        if ltp > breakout_level and (prev_close <= breakout_level or retest_is_recent):
+                            is_breakout = True
+            
+            # 4. Consolidation check of last 3 candles before confirmed candle
+            confirmed_idx = df_today.index.get_loc(confirmed_candle.name)
+            if confirmed_idx >= 3:
+                preceding_candles = df_today.iloc[confirmed_idx-3:confirmed_idx]
+                preceding_low = preceding_candles['low'].min()
+                tight_range = (preceding_candles['high'].max() - preceding_low) / preceding_low * 100 if preceding_low > 0 else 99
+                is_consolidating = tight_range <= 0.50
+            else:
+                is_consolidating = True
+
             # --- SLIPPAGE / NO-CHASE FILTER (New) ---
             # Discard if price has already moved > 0.8% from the breakout level
             slippage_pct = (ltp - breakout_level) / breakout_level * 100
             is_chasing = slippage_pct > 0.8
             
-            if vol_spike and above_vwap and not is_chasing:
+            if vol_spike and above_vwap and not is_chasing and nifty_bullish and is_consolidating:
                 # Active Trading Hours
                 if datetime.time(9, 30) <= to_date.time() <= datetime.time(15, 0) and is_breakout:
-                    entry_price = ltp
+                    # Retest limit entry: enter at breakout_level if touch occurred, else close
+                    entry_price = breakout_level if confirmed_candle['low'] <= breakout_level else ltp
                     qty = int(250000 / entry_price)
                     
                     # Structural SL: VWAP - 0.2% buffer

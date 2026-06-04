@@ -250,6 +250,13 @@ def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None
     df_session['vol_ma20'] = df_session['volume'].rolling(window=20).mean()
     df_session['rsi_5m'] = calculate_rsi(df_session['close'], period=14)
     
+    # Calculate 5-minute ATR for dynamic rejection band
+    high_low = df_session['high'] - df_session['low']
+    high_prev_close = (df_session['high'] - df_session['close'].shift(1)).abs()
+    low_prev_close = (df_session['low'] - df_session['close'].shift(1)).abs()
+    tr = pd.concat([high_low, high_prev_close, low_prev_close], axis=1).max(axis=1)
+    df_session['atr_5m'] = tr.rolling(window=5).mean().fillna(high_low)
+    
     # 3. Reversal Candlestick Arrays
     ss, be, pb = detect_bearish_reversals(df_session)
     df_session['is_shooting_star'] = ss
@@ -282,12 +289,13 @@ def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None
     # Confirmed breakdown occurred in session before this candle
     df_session['has_broken_down'] = (df_session['support_break'] | df_session['vwap_break']).cumsum() > 0
     
-    # 6. Pullback Detection: touched or came within a tight threshold of VWAP/EMA
-    v_pullback = (df_session['high'] >= df_session['vwap'] * (1 - pullback_threshold)) & \
-                 (df_session['low'] <= df_session['vwap'] * (1 + pullback_threshold))
+    # 6. Pullback Detection: touched or came within an ATR-based dynamic band of VWAP/EMA
+    atr_buffer = 0.2 * df_session['atr_5m']
+    v_pullback = (df_session['high'] >= df_session['vwap'] - atr_buffer) & \
+                 (df_session['low'] <= df_session['vwap'] + atr_buffer)
                  
-    e_pullback = (df_session['high'] >= df_session['ema_9'] * (1 - pullback_threshold)) & \
-                 (df_session['low'] <= df_session['ema_9'] * (1 + pullback_threshold))
+    e_pullback = (df_session['high'] >= df_session['ema_9'] - atr_buffer) & \
+                 (df_session['low'] <= df_session['ema_9'] + atr_buffer)
                  
     df_session['pullback_touches'] = v_pullback | e_pullback
     

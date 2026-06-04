@@ -24,14 +24,24 @@ import telegram_agent
 import image_generator
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("scheduler.log"),
-        logging.StreamHandler()
-    ]
-)
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Clear existing handlers to prevent duplicate logs or basicConfig overrides
+for handler in list(root_logger.handlers):
+    root_logger.removeHandler(handler)
+
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# File handler for scheduler.log
+file_handler = logging.FileHandler("scheduler.log", encoding="utf-8")
+file_handler.setFormatter(formatter)
+root_logger.addHandler(file_handler)
+
+# Stream handler for console output
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+root_logger.addHandler(stream_handler)
 
 def get_kite_instance():
     """Helper to initialize Kite from saved session."""
@@ -426,9 +436,212 @@ Use this format exactly (do not include introductory greetings or disclaimers, g
     except Exception as e:
         logging.error(f"Error in run_ai_position_advisor: {e}")
 
+def send_daily_swing_report():
+    """Compiles and sends daily swing portfolio report with stats, P&L, ROI%, and equity curve chart at 3:15 PM."""
+    if datetime.datetime.today().weekday() > 4:
+        logging.info("Skipping Swing Report: Weekend.")
+        return
+
+    logging.info("📊 Compiling Daily Swing Trades Report...")
+    kite = get_kite_instance()
+    if not kite:
+        logging.error("Failed to get Kite client for swing report.")
+        return
+
+    try:
+        import pandas as pd
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import paper_trader
+        
+        # 1. Fetch swing trades
+        swing_df = paper_trader.update_swing_portfolio(kite)
+        active_swing = pd.DataFrame()
+        if not swing_df.empty:
+            active_swing = swing_df[swing_df['Status'] == 'OPEN'].copy()
+
+        # 2. Fetch Archived stats
+        total_realized_swing = 0
+        total_invested_archive = 0
+        archive_roi_pct = 0
+        
+        if os.path.exists(paper_trader.SWING_ARCHIVE_FILE):
+            archive_df = pd.read_csv(paper_trader.SWING_ARCHIVE_FILE)
+            if not archive_df.empty:
+                total_realized_swing = archive_df['Net P&L'].sum()
+                total_invested_archive = (archive_df['EntryPrice'] * archive_df['Qty']).sum()
+                archive_roi_pct = (total_realized_swing / total_invested_archive * 100) if total_invested_archive > 0 else 0
+
+        # 3. Calculate active stats
+        total_active_investment = 0
+        active_day_pnl = 0
+        active_total_pnl = 0
+        active_pnl_pct = 0
+        
+        position_status_details = ""
+        if not active_swing.empty:
+            total_active_investment = (active_swing['EntryPrice'] * active_swing['Qty']).sum()
+            active_day_pnl = active_swing['Day P&L'].sum()
+            active_total_pnl = active_swing['Live P&L'].sum()
+            active_pnl_pct = (active_total_pnl / total_active_investment * 100) if total_active_investment > 0 else 0
+            
+            for _, row in active_swing.iterrows():
+                pnl_sign = "+" if row['Net P&L'] >= 0 else ""
+                position_status_details += f"📌 *{row['Ticker']}*: Qty {row['Qty']} | Entry: ₹{row['EntryPrice']:.2f} | LTP: ₹{row['Current Price']:.2f} | P&L: {pnl_sign}₹{row['Net P&L']:.2f} ({row['Return %']:.2f}%)\n"
+        else:
+            position_status_details = "_No active positions._\n"
+
+        # Overall Net P&L (Active + Realized)
+        net_swing_pnl = total_realized_swing + active_total_pnl
+        net_pnl_sign = "+" if net_swing_pnl >= 0 else ""
+
+        # 4. Generate Equity Curve Chart
+        swing_curve = paper_trader.get_swing_equity_curve(kite)
+        chart_filename = "swing_equity_curve.png"
+        has_chart = False
+        
+        if not swing_curve.empty and len(swing_curve) > 1:
+            # Generate the plot
+            plt.figure(figsize=(10, 5))
+            plt.plot(swing_curve['Date'], swing_curve['Cumulative P&L'], color='#10b981', linewidth=2.5, marker='o', markersize=5)
+            plt.fill_between(swing_curve['Date'], swing_curve['Cumulative P&L'], color='#10b981', alpha=0.1)
+            plt.title("Lifetime Swing Equity Curve", fontsize=14, fontweight='bold', pad=15)
+            plt.xlabel("Date", fontsize=11)
+            plt.ylabel("Cumulative P&L (₹)", fontsize=11)
+            plt.grid(True, linestyle='--', alpha=0.5)
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(chart_filename, dpi=300)
+            plt.close()
+            has_chart = True
+
+        # 5. Format Telegram Message
+        active_day_sign = "+" if active_day_pnl >= 0 else ""
+        active_total_sign = "+" if active_total_pnl >= 0 else ""
+        realized_sign = "+" if total_realized_swing >= 0 else ""
+
+        msg = (
+            f"📊 *Daily Swing Trades Report (3:15 PM)* 📊\n\n"
+            f"📈 *Active Swing Positions:*\n"
+            f"• Total Investment: ₹{total_active_investment:,.2f}\n"
+            f"• Day's P&L: {active_day_sign}₹{active_day_pnl:,.2f}\n"
+            f"• Total P&L: {active_total_sign}₹{active_total_pnl:,.2f} ({active_pnl_pct:.2f}%)\n\n"
+            f"📚 *Swing Trade Archive (Realized):*\n"
+            f"• Total Realized P&L: {realized_sign}₹{total_realized_swing:,.2f}\n"
+            f"• Overall Strategy ROI: {archive_roi_pct:.2f}%\n\n"
+            f"💼 *Overall Swing Performance:*\n"
+            f"• Net Swing P&L (Active + Realized): {net_pnl_sign}₹{net_swing_pnl:,.2f}\n\n"
+            f"📝 *Position Details:*\n"
+            f"{position_status_details}"
+        )
+
+        tel_token = config.TELEGRAM_BOT_TOKEN
+        tel_chat_id = config.TELEGRAM_CHAT_ID # Send to primary swing channel
+        
+        if has_chart and os.path.exists(chart_filename):
+            telegram_agent.send_photo(chart_filename, msg, tel_token, tel_chat_id, parse_mode="Markdown")
+            try:
+                os.remove(chart_filename) # Cleanup local image
+            except: pass
+        else:
+            telegram_agent.send_message(msg, tel_token, tel_chat_id, parse_mode="Markdown")
+            
+        logging.info("✅ Daily swing report sent to Telegram.")
+    except Exception as e:
+        logging.error(f"Error compiling/sending swing report: {e}")
+
+def run_automated_315_swing():
+    """Runs 3:15 PM Swing Strategy, runs Gemini AI Advisor, executes finalized paper trades, sends swing report, and terminates the service."""
+    if datetime.datetime.today().weekday() > 4:
+        logging.info("Skipping Swing Strategy: Weekend.")
+        return
+
+    logging.info("🚀 Starting Automated 3:15 PM Swing Strategy...")
+    kite = get_kite_instance()
+    if not kite:
+        logging.error("Failed to get Kite client for 3:15 PM Swing setup.")
+        return
+
+    gemini_key = getattr(config, 'GEMINI_API_KEY', '')
+    if not gemini_key:
+        logging.error("AI Advisor: GEMINI_API_KEY is not configured in config.py.")
+        return
+
+    try:
+        # 1. Scan for candidates
+        results_df = kite_scanner.scan_315_setups(kite)
+        if results_df.empty:
+            logging.info("No swing candidates found today.")
+        else:
+            # 2. Run AI Advisor Conviction picks
+            import ai_advisor
+            ai_opinion = ai_advisor.analyze_stocks(results_df, gemini_key, strategy_name="3:15 PM Swing Setup")
+            logging.info(f"AI Opinion received:\n{ai_opinion}")
+            
+            # 3. Extract finalized tickers
+            candidates_tickers = results_df['Ticker'].tolist()
+            finalized_tickers = []
+            for ticker in candidates_tickers:
+                for line in ai_opinion.split('\n'):
+                    if "Pick" in line and ticker.upper() in line.upper():
+                        finalized_tickers.append(ticker)
+                        break
+                        
+            logging.info(f"Finalized Swing Tickers: {finalized_tickers}")
+            
+            # 4. Execute Swing Trades
+            import paper_trader
+            executed_trades = []
+            for ticker in finalized_tickers:
+                row = results_df[results_df['Ticker'] == ticker].iloc[0]
+                qty = round(100000 / row['LTP']) if row['LTP'] > 0 else 0
+                if qty > 0:
+                    success = paper_trader.execute_swing_trade(
+                        ticker=row['Ticker'],
+                        entry_price=row['LTP'],
+                        target=row['Target'],
+                        sl=row['Stop Loss'],
+                        qty=qty,
+                        token=int(row['Token'])
+                    )
+                    if success:
+                        executed_trades.append(f"🟢 Executed Swing Trade: {ticker} (Qty {qty} @ ₹{row['LTP']:.2f})")
+                        
+            # 5. Dispatch Telegram Summary
+            tel_token = config.TELEGRAM_BOT_TOKEN
+            tel_chat_id = config.TELEGRAM_CHAT_ID # Swing channel
+            
+            trades_text = "\n".join(executed_trades) if executed_trades else "No trades executed."
+            report_msg = (
+                f"🎯 *Automated 3:15 PM Swing Execution* 🎯\n\n"
+                f"🤖 *AI Conviction Opinion:*\n{ai_opinion}\n\n"
+                f"💼 *Trades Executed:*\n{trades_text}"
+            )
+            telegram_agent.send_message(report_msg, tel_token, tel_chat_id, parse_mode="Markdown")
+            
+        # 5. Send daily swing report
+        try:
+            send_daily_swing_report()
+        except Exception as report_err:
+            logging.error(f"Failed to send daily swing report: {report_err}")
+            
+        # 6. Stop the service process
+        logging.info("🚪 Terminating scheduler service process after swing execution.")
+        import os
+        os._exit(0)
+        
+    except Exception as e:
+        logging.error(f"Error in automated 3:15 PM Swing strategy: {e}")
+        import os
+        os._exit(0)
+
 # --- Scheduler Config ---
 # 9:05 AM IST - Morning Cache
 schedule.every().day.at("09:05").do(run_morning_cache)
+
+# 3:15 PM IST - Automated Swing Setup & Report
+schedule.every().day.at("15:15").do(run_automated_315_swing)
 
 # 9:31 AM IST - Initial Breakout Scan
 schedule.every().day.at("09:31").do(run_automated_orb, scan_label="Initial 9:31 AM")

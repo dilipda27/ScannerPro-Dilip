@@ -331,8 +331,29 @@ def run_stage2_setup_validation(kite):
             price_spread_pct = (close_5d.max() - close_5d.min()) / close_5d.min() * 100
             is_price_flat = price_spread_pct <= 4.0
             
-            # Setup Validation Criteria: 5-day ATR < 14-day ATR AND Tight Squeeze AND Volume dry-up AND Flat Closes
-            if (latest_atr_5 < latest_atr_14) and is_tight and is_volume_contracted and is_price_flat:
+            # 4. Pivot Contraction Waves (VCP Waves)
+            df_peaks = df.iloc[-40:].copy()
+            df_peaks['peak'] = df_peaks['high'] == df_peaks['high'].rolling(5, center=True).max()
+            df_peaks['trough'] = df_peaks['low'] == df_peaks['low'].rolling(5, center=True).min()
+            
+            peaks = df_peaks[df_peaks['peak']]['high'].tolist()
+            troughs = df_peaks[df_peaks['trough']]['low'].tolist()
+            
+            is_contracting_waves = True
+            depths = []
+            if len(peaks) >= 2 and len(troughs) >= 2:
+                peak_indices = df_peaks[df_peaks['peak']].index
+                for p_idx, p_val in zip(peak_indices, peaks):
+                    post_troughs = df_peaks[df_peaks['trough']].loc[p_idx:]
+                    if not post_troughs.empty:
+                        t_val = post_troughs['low'].iloc[0]
+                        depth = (p_val - t_val) / p_val * 100
+                        depths.append(depth)
+                if len(depths) >= 2:
+                    is_contracting_waves = depths[-1] < depths[-2]
+
+            # Setup Validation Criteria: 5-day ATR < 14-day ATR AND Tight Squeeze AND Volume dry-up AND Flat Closes AND Contracting Waves
+            if (latest_atr_5 < latest_atr_14) and is_tight and is_volume_contracted and is_price_flat and is_contracting_waves:
                 # Triggers are the 20-day rolling highs and lows calculated in Stage 1
                 watchlist[token] = {
                     "symbol": symbol,
@@ -340,13 +361,14 @@ def run_stage2_setup_validation(kite):
                     "trigger_sell": metadata["support"],     # Breakdown trigger (20-day low)
                     "atr_5": round(float(latest_atr_5), 2)
                 }
-                logging.info(f"🔥 VALIDATED: {symbol} - Volatility contracting (5-day ATR: ₹{latest_atr_5:.2f} < 14-day ATR: ₹{latest_atr_14:.2f} | ATR %: {atr_percent:.2f}% | 5D Close Range: {price_spread_pct:.2f}% | Vol Squeeze: Yes)")
+                logging.info(f"🔥 VALIDATED: {symbol} - Volatility contracting (5-day ATR: ₹{latest_atr_5:.2f} < 14-day ATR: ₹{latest_atr_14:.2f} | ATR %: {atr_percent:.2f}% | 5D Close Range: {price_spread_pct:.2f}% | Depths: {[round(d, 2) for d in depths]})")
             else:
                 reason = []
                 if latest_atr_5 >= latest_atr_14: reason.append("No ATR contraction")
                 if not is_tight: reason.append(f"ATR not tight enough ({atr_percent:.2f}%)")
                 if not is_volume_contracted: reason.append("No volume dry-up")
                 if not is_price_flat: reason.append(f"Closes too wide ({price_spread_pct:.2f}%)")
+                if not is_contracting_waves: reason.append(f"Waves not contracting ({[round(d, 2) for d in depths]})")
                 logging.info(f"❌ Filtered Out: {symbol} - {', '.join(reason)}")
                 
         except Exception as e:
@@ -490,6 +512,16 @@ class IntradayLiveMonitor:
                     if today_open and last_price <= today_open:
                         continue # Skip false breakouts on negative intraday momentum
                     
+                    # Check first-hour range constraint: if the high-to-low range so far is too wide
+                    today_high = tick_ohlc.get('high')
+                    today_low = tick_ohlc.get('low')
+                    if today_high and today_low and today_low > 0:
+                        today_range_pct = (today_high - today_low) / today_low * 100
+                        if today_range_pct > 3.0:
+                            logging.info(f"🚫 Skipping breakout for {symbol}: Intraday range ({today_range_pct:.2f}%) is too wide (no tight consolidation today).")
+                            metadata["trigger_buy"] = None
+                            continue
+                    
                     # Prevent entering if the stock is already extended (e.g., > 5.5% gain on the day from previous close or open)
                     if prev_close and prev_close > 0:
                         day_gain_pct = (last_price - prev_close) / prev_close * 100
@@ -540,12 +572,22 @@ class IntradayLiveMonitor:
                             
                     # Immediately clear the trigger value to prevent duplicates
                     metadata["trigger_buy"] = None
-
+ 
                 # --- B. Bearish Breakdown Check ---
                 elif trigger_sell is not None and last_price <= trigger_sell:
                     # Enforce that price must be below today's open to confirm negative intraday momentum
                     if today_open and last_price >= today_open:
                         continue # Skip false breakdowns on positive intraday momentum
+                    
+                    # Check first-hour range constraint: if the high-to-low range so far is too wide
+                    today_high = tick_ohlc.get('high')
+                    today_low = tick_ohlc.get('low')
+                    if today_high and today_low and today_low > 0:
+                        today_range_pct = (today_high - today_low) / today_low * 100
+                        if today_range_pct > 3.0:
+                            logging.info(f"🚫 Skipping breakdown for {symbol}: Intraday range ({today_range_pct:.2f}%) is too wide (no tight consolidation today).")
+                            metadata["trigger_sell"] = None
+                            continue
                         
                     # Prevent entering if the stock is already extended (e.g., > 5.5% drop on the day from previous close or open)
                     if prev_close and prev_close > 0:
@@ -659,6 +701,8 @@ if not hasattr(sys, "_vcp_monitor_instance"):
     sys._vcp_monitor_instance = None
 if not hasattr(sys, "_vcp_monitor_thread"):
     sys._vcp_monitor_thread = None
+if not hasattr(sys, "_vcp_monitor_enabled"):
+    sys._vcp_monitor_enabled = False
 
 def start_live_monitor(kite, watchlist):
     """
@@ -668,10 +712,12 @@ def start_live_monitor(kite, watchlist):
     # 1. Thread verification: Prevent spawning a new thread if one is already running in background
     for t in threading.enumerate():
         if t.name == "vcp_monitor_thread" and t.is_alive():
+            sys._vcp_monitor_enabled = True
             logging.warning("⚠️ vcp_monitor_thread is already running in background. Skipping spawn.")
             return True, "Live Monitor is already running in the background."
 
     if sys._vcp_monitor_instance and sys._vcp_monitor_instance.kws and sys._vcp_monitor_instance.kws.is_connected():
+        sys._vcp_monitor_enabled = True
         return True, "Live Monitor is already running."
         
     session_file = ".kite_session.json"
@@ -693,17 +739,22 @@ def start_live_monitor(kite, watchlist):
             
         sys._vcp_monitor_thread = threading.Thread(target=run, name="vcp_monitor_thread", daemon=True)
         sys._vcp_monitor_thread.start()
+        sys._vcp_monitor_enabled = True
         logging.info("🟢 Volatility Contraction Live WebSocket Monitor thread spawned.")
         return True, "Live monitor WebSocket successfully started in the background."
     except Exception as e:
+        sys._vcp_monitor_enabled = False
         logging.error(f"❌ Failed to start live monitor thread: {e}")
         return False, f"Failed to start live monitor: {e}"
 
 def stop_live_monitor():
     """Tears down the running background WebSocket connection."""
+    sys._vcp_monitor_enabled = False
     if sys._vcp_monitor_instance:
         try:
             sys._vcp_monitor_instance.stop_monitoring()
+            if sys._vcp_monitor_thread and sys._vcp_monitor_thread.is_alive():
+                sys._vcp_monitor_thread.join(timeout=1.0)
             sys._vcp_monitor_instance = None
             sys._vcp_monitor_thread = None
             logging.info("🔴 Volatility Contraction Live WebSocket Monitor thread stopped.")
@@ -715,6 +766,8 @@ def stop_live_monitor():
 
 def is_live_monitor_running():
     """Returns True if the background live monitor instance is active."""
+    if not getattr(sys, "_vcp_monitor_enabled", False):
+        return False
     # Also verify if the thread is alive in the process
     thread_alive = any(t.name == "vcp_monitor_thread" and t.is_alive() for t in threading.enumerate())
     instance_connected = sys._vcp_monitor_instance is not None and sys._vcp_monitor_instance.kws and sys._vcp_monitor_instance.kws.is_connected()

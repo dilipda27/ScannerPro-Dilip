@@ -874,6 +874,7 @@ if st.session_state.get('kite_access_token'):
     if 'mon_52w' not in st.session_state: st.session_state.mon_52w = False
     if 'mon_bearish' not in st.session_state: st.session_state.mon_bearish = False
     if 'mon_vwap_rejection' not in st.session_state: st.session_state.mon_vwap_rejection = False
+    if 'mon_bullish_vwap_rejection' not in st.session_state: st.session_state.mon_bullish_vwap_rejection = False
     if 'mon_bullish' not in st.session_state: st.session_state.mon_bullish = False
     if 'mon_failed_breakout' not in st.session_state: st.session_state.mon_failed_breakout = False
     
@@ -881,6 +882,7 @@ if st.session_state.get('kite_access_token'):
     st.session_state.mon_52w = st.sidebar.toggle("52-Week High Monitor", value=st.session_state.mon_52w)
     st.session_state.mon_bearish = st.sidebar.toggle("Bearish Breakdown Monitor", value=st.session_state.mon_bearish)
     st.session_state.mon_vwap_rejection = st.sidebar.toggle("Bearish VWAP Rejection Monitor", value=st.session_state.mon_vwap_rejection)
+    st.session_state.mon_bullish_vwap_rejection = st.sidebar.toggle("Bullish VWAP Rejection Monitor", value=st.session_state.mon_bullish_vwap_rejection)
     st.session_state.mon_bullish = st.sidebar.toggle("Bullish Breakout Monitor", value=st.session_state.mon_bullish)
     st.session_state.mon_failed_breakout = st.sidebar.toggle("Failed Breakout Short Monitor", value=st.session_state.mon_failed_breakout)
     
@@ -999,7 +1001,9 @@ KITE_STRATEGIES = [
     "3:15 PM Swing Setup (Kite)",
     "EOD Long Swing Setup (Kite)",
     "Multi-Year Breakout (Kite)",
-    "Volatility Contraction Scanner (Kite)"
+    "Volatility Contraction Scanner (Kite)",
+    "Bearish VWAP Rejection (Kite)",
+    "Bullish VWAP Rejection (Kite)"
 ]
 
 YF_STRATEGIES = ["Swing Trade Candidates", "Volume Breakout Stocks"]
@@ -1033,6 +1037,130 @@ for s in selected_strategies:
     if s in cache_files:
         count = get_cache_count(cache_files[s])
         st.sidebar.markdown(f"**{s}**: `{count}` stocks cached")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📅 Scheduled Cache Service")
+
+import intraday_cache_service
+service_state = intraday_cache_service.get_service_status()
+
+if service_state["running"]:
+    st.sidebar.success(f"🟢 {service_state['status']}")
+    
+    # Render tasks progress
+    for task in service_state["task_list"]:
+        t_id = task["id"]
+        t_name = task["name"]
+        t_time = task["scheduled_time"]
+        if t_id in service_state["completed_tasks"]:
+            st.sidebar.markdown(f"✅ ~~{t_name}~~ ({t_time})")
+        elif service_state["current_task"] == t_id:
+            st.sidebar.markdown(f"🔄 **{t_name}** ({t_time})")
+        else:
+            st.sidebar.markdown(f"⏳ {t_name} ({t_time})")
+            
+    # Stop button
+    if st.sidebar.button("🛑 Stop Caching Service", use_container_width=True):
+        intraday_cache_service.stop_service()
+        st.toast("Stopped background Caching Service.", icon="🛑")
+        st.rerun()
+else:
+    st.sidebar.info(f"⚪ Status: {service_state['status']}")
+    if st.sidebar.button("🚀 Start Caching Service", use_container_width=True, type="primary"):
+        if not st.session_state.kite_access_token:
+            st.sidebar.error("🔒 Authenticate with Kite first.")
+        else:
+            success, msg = intraday_cache_service.start_service()
+            if success:
+                st.toast("📡 Background Caching Service Started!", icon="🟢")
+                st.rerun()
+            else:
+                st.sidebar.error(msg)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🕰️ Automated Scheduler Service")
+
+# Helper functions for managing scheduler process
+PID_FILE = ".scheduler_pid.json"
+
+def get_scheduler_pid():
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE, "r") as f:
+                data = json.load(f)
+                return data.get("pid")
+        except Exception:
+            pass
+    return None
+
+def set_scheduler_pid(pid):
+    try:
+        with open(PID_FILE, "w") as f:
+            json.dump({"pid": pid}, f)
+    except Exception:
+        pass
+
+def clear_scheduler_pid():
+    if os.path.exists(PID_FILE):
+        try:
+            os.remove(PID_FILE)
+        except Exception:
+            pass
+
+def is_scheduler_running():
+    pid = get_scheduler_pid()
+    if pid is None:
+        return False
+    try:
+        import subprocess
+        output = subprocess.check_output(f'tasklist /FI "PID eq {pid}"', shell=True).decode()
+        return str(pid) in output
+    except Exception:
+        return False
+
+scheduler_running = is_scheduler_running()
+
+if scheduler_running:
+    st.sidebar.success(f"🟢 Running (PID: {get_scheduler_pid()})")
+    st.sidebar.caption("Runs daily at 3:15 PM, runs AI advisor, executes trades, and stops.")
+    if st.sidebar.button("🛑 Stop Scheduler Service", use_container_width=True, key="stop_sched_btn"):
+        pid = get_scheduler_pid()
+        if pid is not None:
+            import subprocess
+            import sys
+            try:
+                if sys.platform == "win32":
+                    subprocess.run(f"taskkill /F /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    os.kill(pid, 9)
+                st.toast("Scheduler Service stopped successfully.", icon="🛑")
+            except Exception as e:
+                st.sidebar.error(f"Error stopping: {e}")
+            clear_scheduler_pid()
+            st.rerun()
+else:
+    st.sidebar.info("⚪ Status: Stopped")
+    if st.sidebar.button("🚀 Start Scheduler Service", use_container_width=True, type="primary", key="start_sched_btn"):
+        if not st.session_state.kite_access_token:
+            st.sidebar.error("🔒 Authenticate with Kite first.")
+        else:
+            import subprocess
+            import sys
+            try:
+                creationflags = 0
+                if sys.platform == "win32":
+                    creationflags = 0x00000008 # DETACHED_PROCESS
+                p = subprocess.Popen(
+                    [sys.executable, "scheduler_service.py"],
+                    creationflags=creationflags,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                set_scheduler_pid(p.pid)
+                st.toast(f"Scheduler Service started (PID: {p.pid})!", icon="🟢")
+                st.rerun()
+            except Exception as e:
+                st.sidebar.error(f"Failed to start: {e}")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚡ Bulk Operations")
@@ -1131,7 +1259,7 @@ if 'all_results' not in st.session_state:
 
 # Allow users to run scan
 if st.button(f"Run Scan: {strategy}", type="primary"):
-    if strategy in ["3:15 PM Swing Setup (Kite)", "15-Min ORB Breakout (Kite)", "EOD Long Swing Setup (Kite)", "Multi-Year Breakout (Kite)"] and not st.session_state.kite_access_token:
+    if strategy.endswith("(Kite)") and not st.session_state.kite_access_token:
         st.error("Please authenticate with Kite Connect in the sidebar first.")
     else:
         with st.spinner(f"Running {strategy} scan... This may take a few minutes depending on the strategy."):
@@ -1308,7 +1436,28 @@ if st.button(f"Run Scan: {strategy}", type="primary"):
                 except Exception as e:
                     st.error(f"Failed to run Multi-Year Breakout Scanner: {e}")
                     results_df = pd.DataFrame()
-
+            elif strategy == "Bearish VWAP Rejection (Kite)":
+                try:
+                    import bearish_vwap_rejection_scanner
+                    kite = KiteConnect(api_key=api_key)
+                    kite.set_access_token(st.session_state.kite_access_token)
+                    progress_bar.progress(50)
+                    status_text.text("Running Bearish VWAP Rejection Scan...")
+                    results_df, monitored = bearish_vwap_rejection_scanner.scan_bearish_vwap_rejections(kite)
+                except Exception as e:
+                    st.error(f"Failed to run Bearish VWAP Rejection: {e}")
+                    results_df = pd.DataFrame()
+            elif strategy == "Bullish VWAP Rejection (Kite)":
+                try:
+                    import bullish_vwap_rejection_scanner
+                    kite = KiteConnect(api_key=api_key)
+                    kite.set_access_token(st.session_state.kite_access_token)
+                    progress_bar.progress(50)
+                    status_text.text("Running Bullish VWAP Rejection Scan...")
+                    results_df, monitored = bullish_vwap_rejection_scanner.scan_bullish_vwap_rejections(kite)
+                except Exception as e:
+                    st.error(f"Failed to run Bullish VWAP Rejection: {e}")
+                    results_df = pd.DataFrame()
             else:
                 tickers = scanner.get_nifty500_fno_tickers()
                 
@@ -1368,6 +1517,7 @@ any_active = (
     st.session_state.get('mon_bearish') or 
     st.session_state.get('mon_bullish') or 
     st.session_state.get('mon_vwap_rejection') or
+    st.session_state.get('mon_bullish_vwap_rejection') or
     volatility_contraction_scanner.is_live_monitor_running() or
     ai_advisor.is_ai_advisor_enabled()
 )
@@ -1600,6 +1750,70 @@ if any_active and st.session_state.get('kite_access_token'):
                                 p_count += 1
                         if p_count > 0:
                             st.toast(f"✅ Executed {p_count} paper trades for Bearish VWAP Rejection", icon="📉")
+
+    # 3.6. RUN BULLISH VWAP REJECTION MONITOR
+    if st.session_state.get('mon_bullish_vwap_rejection'):
+        with st.spinner("Live Scanning Bullish VWAP Rejections..."):
+            import bullish_vwap_rejection_scanner
+            res_vwap, monitored_vwap = bullish_vwap_rejection_scanner.scan_bullish_vwap_rejections(kite)
+            
+            if not res_vwap.empty:
+                import notification_helper
+                new_tickers = notification_helper.filter_new_tickers("BULLISH_VWAP_REJECTION", res_vwap['Ticker'].tolist())
+                
+                if new_tickers:
+                    new_vwap = res_vwap[res_vwap['Ticker'].isin(new_tickers)]
+                    # Check active portfolio and filter out existing tickers
+                    import paper_trader
+                    p_df = paper_trader.get_portfolio()
+                    active_tickers = p_df[p_df['Status'] == 'Active']['Ticker'].tolist() if not p_df.empty else []
+                    new_vwap = new_vwap[~new_vwap['Ticker'].isin(active_tickers)]
+                    
+                    if not new_vwap.empty:
+                        st.session_state.results_df = new_vwap  # Update display
+                        import telegram_agent
+                        # Route to Intraday Channel
+                        tel_chat_id_intraday = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
+                        
+                        for _, row in new_vwap.iterrows():
+                            msg = (
+                                f"📈 *Bullish VWAP Rejection Alert* 📈\n\n"
+                                f"🎯 *Ticker*: {row['Ticker']}\n"
+                                f"🟢 *Entry (Long)*: ₹{row['Price']}\n"
+                                f"🛡️ *Stop Loss*: ₹{row['SL']}\n"
+                                f"🟢 *Target 1 (1.5R)*: ₹{row['Target_1']}\n"
+                                f"🟢 *Target 2 (3.0R)*: ₹{row['Target_2']}\n"
+                                f"📊 *Pattern*: {row['Pattern']}\n"
+                                f"🛡️ *Zone*: {row['Zone']} Rejection\n"
+                                f"📈 *Risk/Reward*: {row['Risk_Reward']}\n"
+                            )
+                            df_chart = kite_scanner.fetch_kite_data(kite, int(row['Token']), datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                            telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, config.TELEGRAM_BOT_TOKEN, tel_chat_id_intraday, "Bullish VWAP Rejection", row_data=row)
+
+                        st.toast(f"🔥 {len(new_vwap)} Bullish VWAP Rejections Triggered!", icon="💚")
+                        
+                        for _, row in new_vwap.iterrows():
+                            add_notification(row['Ticker'], f"🟢 Bullish VWAP Rejection Entry @ {row['Price']}", category="Bullish")
+                        
+                        notification_helper.mark_as_notified("BULLISH_VWAP_REJECTION", new_vwap['Ticker'].tolist())
+                        
+                        # --- AUTO-EXECUTE PAPER TRADES ---
+                        p_count = 0
+                        for _, row in new_vwap.iterrows():
+                            capital = 250000 # Default capital per trade
+                            qty = int(capital / row['Price'])
+                            if paper_trader.execute_paper_trade(
+                                ticker=row['Ticker'],
+                                trade_type="Bullish Pullback",
+                                entry_price=row['Price'],
+                                sl=row['SL'],
+                                qty=qty,
+                                token=int(row['Token']),
+                                strategy="Bullish VWAP Rejection"
+                            ):
+                                p_count += 1
+                        if p_count > 0:
+                            st.toast(f"✅ Executed {p_count} paper trades for Bullish VWAP Rejection", icon="📈")
 
     # 4. RUN BULLISH BREAKOUT MONITOR
     if st.session_state.mon_bullish:

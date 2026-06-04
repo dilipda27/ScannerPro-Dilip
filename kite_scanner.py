@@ -74,11 +74,32 @@ def get_kite_instruments(kite, symbols):
         logging.error(f"Error fetching instruments from Kite: {e}")
         return {}
 
+CACHE_DIR = "kite_historical_cache"
+
 def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retries=5):
     """
     Fetch historical data from Kite with rate limit handling and retry logic for network stability.
     Kite limit is typically 3 requests per second.
+    Uses a local file cache for daily data to avoid repeated API calls.
     """
+    if interval == "day":
+        cache_subdir = os.path.join(CACHE_DIR, "day")
+        os.makedirs(cache_subdir, exist_ok=True)
+        cache_file = os.path.join(cache_subdir, f"{instrument_token}.csv")
+        
+        # Check if cache exists and was modified today
+        if os.path.exists(cache_file):
+            file_time = datetime.datetime.fromtimestamp(os.path.getmtime(cache_file)).date()
+            if file_time == datetime.date.today():
+                try:
+                    df = pd.read_csv(cache_file)
+                    if not df.empty:
+                        df['date'] = pd.to_datetime(df['date'])
+                        df.set_index('date', inplace=True)
+                        return df
+                except Exception as cache_err:
+                    logging.warning(f"Failed to read daily cache for {instrument_token}: {cache_err}")
+                    
     for attempt in range(retries):
         try:
             enforce_kite_rate_limit()
@@ -94,6 +115,14 @@ def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retrie
             if data:
                 df = pd.DataFrame(data)
                 df['date'] = pd.to_datetime(df['date'])
+                
+                # Save daily data to cache
+                if interval == "day":
+                    try:
+                        df.to_csv(cache_file, index=False)
+                    except Exception as save_err:
+                        logging.warning(f"Failed to save daily cache for {instrument_token}: {save_err}")
+                        
                 df.set_index('date', inplace=True)
                 return df
             return pd.DataFrame()
@@ -669,6 +698,15 @@ def scan_orb_setups(kite, progress_callback=None):
             is_gap_down = first_candle['open'] <= prev_close
             is_red_open = first_candle['close'] <= first_candle['open']
             
+            # Consolidation Check: check if preceding 3 candles had a tight range (<= 0.5%)
+            preceding_candles = df_today.iloc[i:i+3]
+            preceding_low = preceding_candles['low'].min()
+            tight_range = (preceding_candles['high'].max() - preceding_low) / preceding_low * 100 if preceding_low > 0 else 99
+            is_consolidating = tight_range <= 0.50
+
+            # Index Alignment Check
+            nifty_trend = sector_status.get("NIFTY 50", "Neutral")
+
             if not (vol_ok and strength_ok):
                 continue
 
@@ -685,20 +723,23 @@ def scan_orb_setups(kite, progress_callback=None):
                     dist_pct = (row['close'] - orb_high) / orb_high * 100
                     if orb_high > prev_day_high and row['close'] > daily_ema_20 and daily_rsi > 55 and row['close'] > current_vwap:
                         if is_gap_up and is_green_open and 0.1 <= dist_pct <= 0.8:
-                            sl_price = prev_row['low']
-                            
-                            # Check Sector Sync
-                            target_sector = sector_map.get(symbol, "NIFTY 50")
-                            sec_trend = sector_status.get(target_sector, "Neutral")
-                            is_in_sync = (sec_trend == "Bullish")
-                            
-                            if is_in_sync:
-                                breakout_type = "Bullish (Strong Trend)"
-                                breakout_price = row['close']
-                                breakout_time = timestamp.strftime("%H:%M")
-                                vol_ratio = row['volume'] / row['Vol_Avg_5']
+                            # 7. Index Check and Consolidation Check
+                            if nifty_trend == "Bullish" and is_consolidating:
                                 sl_price = prev_row['low']
-                                break
+                                
+                                # Check Sector Sync
+                                target_sector = sector_map.get(symbol, "NIFTY 50")
+                                sec_trend = sector_status.get(target_sector, "Neutral")
+                                is_in_sync = (sec_trend == "Bullish")
+                                
+                                if is_in_sync:
+                                    breakout_type = "Bullish (Strong Trend)"
+                                    # Retest limit entry: enter at orb_high if low touched it, else enter at row close
+                                    breakout_price = orb_high if row['low'] <= orb_high else row['close']
+                                    breakout_time = timestamp.strftime("%H:%M")
+                                    vol_ratio = row['volume'] / row['Vol_Avg_5']
+                                    sl_price = prev_row['low']
+                                    break
             
             # BEARISH BREAKOUT
             elif row['close'] < orb_low:
@@ -713,20 +754,23 @@ def scan_orb_setups(kite, progress_callback=None):
                     dist_pct = (orb_low - row['close']) / orb_low * 100
                     if orb_low < prev_close and row['close'] < daily_ema_20 and daily_rsi < 50 and row['close'] < current_vwap:
                         if is_gap_down and is_red_open and 0.1 <= dist_pct <= 0.8:
-                            sl_price = prev_row['high']
-                            
-                            # Check Sector Sync
-                            target_sector = sector_map.get(symbol, "NIFTY 50")
-                            sec_trend = sector_status.get(target_sector, "Neutral")
-                            is_in_sync = (sec_trend == "Bearish")
-                            
-                            if is_in_sync:
-                                breakout_type = "Bearish (Strong Trend)"
-                                breakout_price = row['close']
-                                breakout_time = timestamp.strftime("%H:%M")
-                                vol_ratio = row['volume'] / row['Vol_Avg_5']
+                            # 7. Index Check and Consolidation Check
+                            if nifty_trend == "Bearish" and is_consolidating:
                                 sl_price = prev_row['high']
-                                break
+                                
+                                # Check Sector Sync
+                                target_sector = sector_map.get(symbol, "NIFTY 50")
+                                sec_trend = sector_status.get(target_sector, "Neutral")
+                                is_in_sync = (sec_trend == "Bearish")
+                                
+                                if is_in_sync:
+                                    breakout_type = "Bearish (Strong Trend)"
+                                    # Retest limit entry: enter at orb_low if high touched it, else enter at row close
+                                    breakout_price = orb_low if row['high'] >= orb_low else row['close']
+                                    breakout_time = timestamp.strftime("%H:%M")
+                                    vol_ratio = row['volume'] / row['Vol_Avg_5']
+                                    sl_price = prev_row['high']
+                                    break
                 
         if breakout_type:
             # Position Sizing (Fixed 250,000 capital per trade)
@@ -793,6 +837,7 @@ def run_unified_morning_cache(kite, progress_callback=None):
         logging.info(f"Pre-filter complete: {len(token_map)} stocks passed.")
     except Exception as e:
         logging.warning(f"Initial quote filter failed: {e}")
+    import concurrent.futures
 
     orb_data = []
     h52_data = []
@@ -802,16 +847,14 @@ def run_unified_morning_cache(kite, progress_callback=None):
     
     total = len(token_map)
     processed = 0
+    _lock = threading.Lock()
     
-    for symbol, token in token_map.items():
-        processed += 1
-        if progress_callback:
-            progress_callback(processed, total, symbol)
-            
+    def process_symbol(symbol, token):
+        nonlocal processed
         try:
             df = fetch_kite_data(kite, token, from_date, to_date, "day")
             if df.empty or len(df) < 250:
-                continue
+                return
                 
             # --- COMMON INDICATORS ---
             df.ta.ema(length=20, append=True)
@@ -819,6 +862,7 @@ def run_unified_morning_cache(kite, progress_callback=None):
             df.ta.ema(length=200, append=True)
             df.ta.rsi(length=14, append=True)
             df.ta.atr(length=14, append=True)
+            df['Range'] = df['high'] - df['low']
             
             latest = df.iloc[-1]
             prev = df.iloc[-2]
@@ -831,16 +875,7 @@ def run_unified_morning_cache(kite, progress_callback=None):
             is_trending_h52 = (ltp > latest['EMA_20'] > latest['EMA_50'] > latest['EMA_200'])
             dist_from_h52 = (high_52w - ltp) / ltp * 100
             
-            if is_trending_h52 and dist_from_h52 <= 3.0:
-                h52_data.append({
-                    "Ticker": symbol, "Token": token, "52W High": high_52w,
-                    "52W Low": df_52w['low'].min(), "ATR_14": latest['ATRr_14'],
-                    "Price_at_Cache": ltp, "Dist_from_High_%": round(dist_from_h52, 2)
-                })
-
             # --- ORB TRENDING LOGIC ---
-            # Volatility Contraction
-            df['Range'] = df['high'] - df['low']
             last_4_ranges = df['Range'].iloc[-5:-1]
             last_7_ranges = df['Range'].iloc[-8:-1]
             is_inside = (prev['high'] < prev_2['high']) and (prev['low'] > prev_2['low'])
@@ -859,19 +894,33 @@ def run_unified_morning_cache(kite, progress_callback=None):
             bullish_orb = ltp > latest['EMA_20'] and latest['RSI_14'] > 55
             bearish_orb = ltp < latest['EMA_20'] and latest['RSI_14'] < 50
             
-            if (bullish_orb or bearish_orb) and atr_pct >= 2.0:
-                orb_data.append({
-                    "Ticker": symbol, "Token": token, "EMA_200": latest['EMA_200'],
-                    "EMA_50": latest['EMA_50'], "EMA_20": latest['EMA_20'],
-                    "RSI": latest['RSI_14'], "ATR_Pct": round(atr_pct, 2),
-                    "RVOL": round(rvol, 2), "Contraction": contraction.strip(),
-                    "Prev_Day_High": prev['high'], "Prev_Day_Low": prev['low'],
-                    "Prev_Day_Close": prev['close'], "Trend": "Bullish" if bullish_orb else "Bearish"
-                })
-
+            with _lock:
+                if is_trending_h52 and dist_from_h52 <= 3.0:
+                    h52_data.append({
+                        "Ticker": symbol, "Token": token, "52W High": high_52w,
+                        "52W Low": df_52w['low'].min(), "ATR_14": latest['ATRr_14'],
+                        "Price_at_Cache": ltp, "Dist_from_High_%": round(dist_from_h52, 2)
+                    })
+                if (bullish_orb or bearish_orb) and atr_pct >= 2.0:
+                    orb_data.append({
+                        "Ticker": symbol, "Token": token, "EMA_200": latest['EMA_200'],
+                        "EMA_50": latest['EMA_50'], "EMA_20": latest['EMA_20'],
+                        "RSI": latest['RSI_14'], "ATR_Pct": round(atr_pct, 2),
+                        "RVOL": round(rvol, 2), "Contraction": contraction.strip(),
+                        "Prev_Day_High": prev['high'], "Prev_Day_Low": prev['low'],
+                        "Prev_Day_Close": prev['close'], "Trend": "Bullish" if bullish_orb else "Bearish"
+                    })
         except Exception as e:
             logging.error(f"Error caching {symbol}: {e}")
-            continue
+        finally:
+            with _lock:
+                processed += 1
+                if progress_callback:
+                    progress_callback(processed, total, symbol)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        futures = {executor.submit(process_symbol, sym, tok): sym for sym, tok in token_map.items()}
+        concurrent.futures.wait(futures.keys())
 
     # Save both caches
     if h52_data:

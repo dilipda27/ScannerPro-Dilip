@@ -268,21 +268,62 @@ def scan_bearish_breakdowns(kite, progress_callback=None):
             # The breakdown candle must close in the lower half of its range to ensure bearish dominance
             candle_ok = confirmed_close < (confirmed_high + confirmed_low) / 2
             
-            # --- TRIGGER ---
+            # 5. Consolidation check of last 3 candles before confirmed candle
+            confirmed_idx = df_today.index.get_loc(confirmed_candle.name)
+            if confirmed_idx >= 3:
+                preceding_candles = df_today.iloc[confirmed_idx-3:confirmed_idx]
+                preceding_low = preceding_candles['low'].min()
+                tight_range = (preceding_candles['high'].max() - preceding_low) / preceding_low * 100 if preceding_low > 0 else 99
+                is_consolidating = tight_range <= 0.50
+            else:
+                is_consolidating = True
+
+            # --- TRIGGER (with Retest Recovery confirmation) ---
             breakdown_level = min(or_low, pdl)
-            is_breakdown = confirmed_close < breakdown_level
+            
+            # Find the first breakdown candle in df_today
+            bd_idx = -1
+            for idx in range(len(df_today)):
+                if df_today.iloc[idx]['close'] < breakdown_level:
+                    bd_idx = idx
+                    break
+            
+            is_breakdown = False
+            if bd_idx != -1:
+                confirmed_candle_idx = df_today.index.get_loc(confirmed_candle.name)
+                # Case 1: Fresh Breakdown (within the immediate next candle of the breakdown close)
+                if confirmed_candle_idx == bd_idx:
+                    is_breakdown = True
+                else:
+                    # Case 2: Breakdown of Retest
+                    # Look for a retest (high >= breakdown_level) after the breakdown candle
+                    has_retested = False
+                    re_idx = -1
+                    for idx in range(bd_idx + 1, len(df_today)):
+                        if df_today.iloc[idx]['high'] >= breakdown_level:
+                            has_retested = True
+                            re_idx = idx
+                    
+                    if has_retested:
+                        # Recovery: current price is back below breakdown_level,
+                        # and either previous candle closed above it, or the retest was very recent.
+                        prev_close = df_today.iloc[-2]['close'] if len(df_today) > 1 else ltp
+                        retest_is_recent = (len(df_today) - 1 - re_idx) <= 2
+                        if ltp < breakdown_level and (prev_close >= breakdown_level or retest_is_recent):
+                            is_breakdown = True
             
             # --- SLIPPAGE / NO-CHASE FILTER (Tightened from 0.8% to 0.4%) ---
             # Discard if price has already dropped > 0.4% from the breakdown level
             slippage_pct = (breakdown_level - ltp) / breakdown_level * 100
             is_chasing = slippage_pct > 0.4
             
-            if vol_spike and below_vwap and not is_chasing and not is_oversold and not is_extended and candle_ok:
+            if vol_spike and below_vwap and not is_chasing and not is_oversold and not is_extended and candle_ok and (not nifty_bullish) and is_consolidating:
                 # If Post-9:30 and BEFORE 15:00 (3 PM) and Breakdown Triggered
                 if datetime.time(9, 30) <= to_date.time() <= datetime.time(15, 0) and is_breakdown:
 
                     # Risk Management (Capital: 250,000 per trade)
-                    entry_price = ltp
+                    # Retest limit entry: enter at breakdown_level if touch occurred, else close
+                    entry_price = breakdown_level if confirmed_candle['high'] >= breakdown_level else ltp
                     qty = int(250000 / entry_price)
                     
                     # Structural Stop Loss (VWAP + 0.2% buffer)
@@ -297,7 +338,6 @@ def scan_bearish_breakdowns(kite, progress_callback=None):
                     results.append({
                         "Ticker": symbol,
                         "Entry Price": str(round(entry_price, 2)),
-
                         "Qty": qty,
                         "Invested Capital": str(round(qty * entry_price, 2)),
                         "OR Low": round(or_low, 2),
@@ -305,7 +345,6 @@ def scan_bearish_breakdowns(kite, progress_callback=None):
                         "VWAP": round(vwap, 2),
                         "Stop Loss": str(round(stop_loss, 2)),
                         "Target": str(round(target_price, 2)),
-
                         "Status": "Triggered",
                         "Token": token
                     })

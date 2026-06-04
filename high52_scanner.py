@@ -88,7 +88,18 @@ def cache_daily_data(kite, progress_callback=None):
             dist_from_high = (high_52w - latest_row['close']) / latest_row['close'] * 100
             is_close_to_high = dist_from_high <= 3.0
             
-            if is_trending and is_close_to_high:
+            # 5. Consolidation Filter (within 5% range for the last 10 sessions prior to today)
+            # Take last 10 completed daily closed prices (excluding today)
+            close_10d = df['close'].iloc[-11:-1] if len(df) >= 11 else df['close']
+            if not close_10d.empty:
+                max_c = close_10d.max()
+                min_c = close_10d.min()
+                daily_range_pct = (max_c - min_c) / min_c * 100
+                is_consolidating_daily = daily_range_pct <= 5.0
+            else:
+                is_consolidating_daily = True
+
+            if is_trending and is_close_to_high and is_consolidating_daily:
                 cache_data.append({
                     "Ticker": symbol,
                     "Token": token,
@@ -132,6 +143,32 @@ def scan_52w_breakouts(kite, progress_callback=None, only_closed_candles=True):
         
     cache_df = pd.read_csv(CACHE_FILE)
     results = []
+    
+    # Load Sector Map
+    import json
+    sector_map = {}
+    if os.path.exists("sector_map.json"):
+        try:
+            with open("sector_map.json", "r") as f:
+                sector_map = json.load(f)
+        except: pass
+
+    # Fetch Sectoral Statuses
+    sector_indices = [
+        "NIFTY 50", "NIFTY BANK", "NIFTY IT", "NIFTY AUTO", "NIFTY METAL", 
+        "NIFTY PHARMA", "NIFTY FMCG", "NIFTY ENERGY", "NIFTY REALTY", "NIFTY PSU BANK"
+    ]
+    sector_status = {}
+    try:
+        idx_quotes = kite.ohlc([f"NSE:{idx}" for idx in sector_indices])
+        for idx in sector_indices:
+            q = idx_quotes.get(f"NSE:{idx}")
+            if q:
+                open_val = q['ohlc']['open']
+                ltp_val = q['last_price']
+                sector_status[idx] = "Bullish" if ltp_val >= open_val else "Bearish"
+    except Exception as e:
+        logging.warning(f"Failed to fetch sectoral indices: {e}")
     
     now = datetime.datetime.now()
     current_time = now.time()
@@ -224,7 +261,12 @@ def scan_52w_breakouts(kite, progress_callback=None, only_closed_candles=True):
             atr_percent = (atr_year := atr_14) / ltp * 100
             cond_atr = atr_percent >= 1.5
             
-            if cond_breakout and cond_rvol and cond_vwap and cond_atr:
+            # 5. Sector Alignment Check
+            target_sector = sector_map.get(symbol, "NIFTY 50")
+            sec_trend = sector_status.get(target_sector, "Neutral")
+            cond_sector = (sec_trend == "Bullish")
+            
+            if cond_breakout and cond_rvol and cond_vwap and cond_atr and cond_sector:
                 results.append({
                     "Ticker": symbol,
                     "LTP": round(ltp, 2),
