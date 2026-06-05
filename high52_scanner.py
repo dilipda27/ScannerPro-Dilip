@@ -20,7 +20,7 @@ def cache_daily_data(kite, progress_callback=None):
     """
     logging.info("Starting Pre-Market Caching for 52-Week High Scanner...")
     
-    symbols = kite_scanner.get_nifty500_symbols()
+    symbols = kite_scanner.get_nifty500_fno_symbols()
     token_map = kite_scanner.get_kite_instruments(kite, symbols)
     
     if not token_map:

@@ -55,6 +55,28 @@ def get_nifty500_symbols():
         # Fallback small list for testing
         return ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"]
 
+def get_nifty500_fno_symbols():
+    """Fetch Nifty 500 stocks and filter for those in the FNO segment."""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    nifty500_symbols = set(get_nifty500_symbols())
+    
+    url_fno = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
+    fno_symbols = set()
+    try:
+        r_fno = requests.get(url_fno, headers=headers, timeout=10)
+        for line in r_fno.text.split('\n'):
+            parts = line.split(',')
+            if len(parts) > 2:
+                sym = parts[1].strip()
+                if sym and sym != "SYMBOL":
+                    fno_symbols.add(sym)
+    except Exception as e:
+        logging.error(f"Error fetching FNO list: {e}")
+        fno_symbols = nifty500_symbols  # Fallback
+        
+    final_symbols = nifty500_symbols.intersection(fno_symbols)
+    return sorted(list(final_symbols))
+
 def get_kite_instruments(kite, symbols):
     """
     Fetch all NSE instruments from Kite and filter out those that are in the symbols list.
@@ -334,7 +356,7 @@ def cache_orb_stocks(kite, progress_callback=None, refresh_shortlist_only=False)
         existing_df = pd.read_csv(ORB_CACHE_FILE)
         symbols = existing_df['Ticker'].tolist()
     else:
-        symbols = get_nifty500_symbols()
+        symbols = get_nifty500_fno_symbols()
         
     token_map = get_kite_instruments(kite, symbols)
     
@@ -522,8 +544,8 @@ def scan_orb_setups(kite, progress_callback=None):
         # Pre-populate indicators from cache
         cache_indicators = cached_df.set_index('Ticker').to_dict('index')
     else:
-        logging.info("No valid cache found. Falling back to full Nifty 500 scan (Slow).")
-        symbols = get_nifty500_symbols()
+        logging.info("No valid cache found. Falling back to full FNO scan (Slow).")
+        symbols = get_nifty500_fno_symbols()
         token_map = get_kite_instruments(kite, symbols)
         cache_indicators = {}
     
@@ -816,7 +838,7 @@ def run_unified_morning_cache(kite, progress_callback=None):
     """
     logging.info("🚀 Starting Unified Morning Caching (ORB + 52W High)...")
     
-    symbols = get_nifty500_symbols()
+    symbols = get_nifty500_fno_symbols()
     token_map = get_kite_instruments(kite, symbols)
     
     if not token_map:

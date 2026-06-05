@@ -80,22 +80,40 @@ def get_kite_instance():
 
 def fetch_nifty500_symbols():
     """
-    Downloads the list of Nifty 500 symbols directly from NSE.
+    Downloads the list of FNO symbols directly from NSE.
     Includes a robust fallback list of highly liquid tickers in case of NSE timeout.
     """
-    logging.info("📡 Fetching Nifty 500 symbols from NSE...")
+    logging.info("📡 Fetching Nifty F&O symbols from NSE...")
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    
+    # 1. Fetch Nifty 500
+    nifty500_symbols = set()
     try:
         response = requests.get(NIFTY500_URL, headers=headers, timeout=10)
         df = pd.read_csv(io.StringIO(response.text))
-        symbols = df['Symbol'].str.strip().tolist()
-        logging.info(f"✅ Successfully retrieved {len(symbols)} symbols from NSE.")
-        return symbols
+        nifty500_symbols = set(df['Symbol'].str.strip().tolist())
     except Exception as e:
-        logging.warning(f"⚠️ Failed to fetch Nifty 500 from NSE: {e}. Using liquid fallback list.")
-        # Fallback list of major NSE liquid names
-        return ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN", "BHARTIARTL", 
-                "LICI", "ITC", "HINDUNILVR", "LT", "BAJFINANCE", "AXISBANK", "KOTAKBANK"]
+        logging.warning(f"⚠️ Failed to fetch Nifty 500 from NSE: {e}. Using fallback.")
+        nifty500_symbols = {"RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"}
+        
+    # 2. Fetch FNO List
+    url_fno = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
+    fno_symbols = set()
+    try:
+        r_fno = requests.get(url_fno, headers=headers, timeout=10)
+        for line in r_fno.text.split('\n'):
+            parts = line.split(',')
+            if len(parts) > 2:
+                sym = parts[1].strip()
+                if sym and sym != "SYMBOL":
+                    fno_symbols.add(sym)
+    except Exception as e:
+        logging.error(f"Error fetching FNO list: {e}")
+        fno_symbols = nifty500_symbols  # Fallback
+        
+    final_symbols = nifty500_symbols.intersection(fno_symbols)
+    logging.info(f"✅ Successfully retrieved and filtered {len(final_symbols)} F&O symbols.")
+    return sorted(list(final_symbols))
 
 
 def get_token_map(kite, symbols):

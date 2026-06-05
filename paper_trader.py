@@ -649,6 +649,9 @@ def update_swing_portfolio(kite):
                 
                 # Record the exit date
                 exit_date = datetime.now().strftime("%Y-%m-%d")
+                if 'ExitDate' not in df.columns:
+                    df['ExitDate'] = None
+                df['ExitDate'] = df['ExitDate'].astype(object)
                 df.loc[df['Ticker'] == row['Ticker'], 'ExitDate'] = exit_date
                 
                 # Reflect in open_trades for the current return
@@ -656,6 +659,9 @@ def update_swing_portfolio(kite):
                 open_trades.loc[idx, 'Current Price'] = exit_price
                 open_trades.loc[idx, 'Live P&L'] = locked_pnl
                 open_trades.loc[idx, 'Return %'] = (locked_pnl / (row['EntryPrice'] * row['Qty'])) * 100
+                if 'ExitDate' not in open_trades.columns:
+                    open_trades['ExitDate'] = None
+                open_trades['ExitDate'] = open_trades['ExitDate'].astype(object)
                 open_trades.loc[idx, 'ExitDate'] = exit_date
                 logging.info(f"🔔 Swing Auto-Exit: {row['Ticker']} at {exit_price} ({new_status})")
             else:
@@ -682,6 +688,10 @@ def update_swing_portfolio(kite):
                     logging.info(f"🛡️ Trailing SL Updated for {row['Ticker']}: {current_sl} -> {new_sl} ({ret_pct:.1f}% gain)")
 
         # Update df with all calculated columns from open_trades
+        if 'ExitDate' not in df.columns:
+            df['ExitDate'] = None
+        df['ExitDate'] = df['ExitDate'].astype(object)
+        
         for col in ['Current Price', 'Live P&L', 'Return %', 'Day P&L', 'Days Held', 'ExitDate']:
             if col in open_trades.columns:
                 for idx, row in open_trades.iterrows():
