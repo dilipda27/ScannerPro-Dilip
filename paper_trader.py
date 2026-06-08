@@ -267,6 +267,64 @@ def clear_portfolio_by_strategy(strategy: str):
         logging.info(f"🧹 Paper Portfolio Cleared for strategy: {strategy}")
     return True
 
+def export_history_to_excel(excel_path="paper_trade_history.xlsx"):
+    """
+    Exports all paper trading tables (Active Portfolio, Today's History, and Permanent Archive)
+    into a single Excel workbook with multiple sheets.
+    """
+    try:
+        import pandas as pd
+        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+            # Sheet 1: Active Portfolio
+            portfolio_df = get_portfolio()
+            if not portfolio_df.empty:
+                portfolio_df.to_excel(writer, sheet_name='Active Portfolio', index=False)
+            else:
+                pd.DataFrame(columns=["Status", "Message"]).to_excel(writer, sheet_name='Active Portfolio', index=False)
+            
+            # Sheet 2: Realized Today (History)
+            history_df = get_history()
+            if not history_df.empty:
+                history_df.to_excel(writer, sheet_name='Realized Today', index=False)
+            else:
+                pd.DataFrame(columns=["Status", "Message"]).to_excel(writer, sheet_name='Realized Today', index=False)
+                
+            # Sheet 3: Permanent Archive
+            if os.path.exists(ARCHIVE_FILE):
+                try:
+                    archive_df = pd.read_csv(ARCHIVE_FILE)
+                    if not archive_df.empty:
+                        archive_df.to_excel(writer, sheet_name='Permanent Archive', index=False)
+                except Exception as arc_err:
+                    logging.warning(f"Could not read permanent archive for excel export: {arc_err}")
+                    
+        logging.info(f"📊 Exported paper trade tables to {excel_path}")
+        return True
+    except Exception as e:
+        logging.error(f"Error exporting to Excel: {e}")
+        return False
+
+def exit_all_trades(kite):
+    """Exit all active paper trades in the portfolio and export the update to Excel."""
+    df = get_portfolio()
+    if df.empty:
+        return 0
+    
+    active_trades = df[df['Status'] == 'Active']
+    if active_trades.empty:
+        return 0
+        
+    count = 0
+    for _, row in active_trades.iterrows():
+        ticker = row['Ticker']
+        if exit_trade(ticker, kite):
+            count += 1
+            
+    # After exiting all, export updated tables to Excel
+    export_history_to_excel("paper_trade_history.xlsx")
+    return count
+
+
 def apply_multi_stage_trailing_sl(row, ltp):
     """
     Applies unified 3-stage trailing stop-loss logic for both Bullish and Bearish trades.

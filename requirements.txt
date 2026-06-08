@@ -9,4 +9,5 @@ Pillow
 schedule
 mplfinance
 plotly
+openpyxl
 
