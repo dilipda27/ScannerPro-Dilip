@@ -57,7 +57,8 @@ def scan_multi_year_breakouts(kite, progress_callback=None):
         try:
             df = kite_scanner.fetch_kite_data(kite, token, from_date, to_date, "day")
             # We need at least 700 trading sessions to compute 500-day MYH + 200 EMA
-            if df.empty or len(df) < 700:
+            # We need at least 520 trading sessions to compute 500-day MYH + 200 EMA
+            if df.empty or len(df) < 520:
                 continue
                 
             # A. Calculate technical indicators
@@ -67,7 +68,9 @@ def scan_multi_year_breakouts(kite, progress_callback=None):
             df.ta.adx(length=14, append=True)  # ADX_14, DMP_14, DMN_14
             df.ta.rsi(length=14, append=True)
             df.ta.atr(length=14, append=True)
-            df['Vol_SMA_20'] = df['volume'].rolling(window=20).mean()
+            
+            # Calculate Volume SMA prior to the breakout week (shift 5 days) to avoid self-inflation
+            df['Vol_SMA_20'] = df['volume'].shift(5).rolling(window=20).mean()
             
             # B. Calculate Multi-Year High (500 trading days prior to the breakout week)
             # Shift by 5 to exclude the current week's candles
@@ -113,13 +116,13 @@ def scan_multi_year_breakouts(kite, progress_callback=None):
             if not vol_ok:
                 continue
                 
-            # 4. Long-Term Trend Alignment
-            trend_ok = (close > latest['EMA_20'] > latest['EMA_50'] > latest['EMA_200'])
+            # 4. Long-Term Trend Alignment (Relaxed to close above 50 and 200 EMA)
+            trend_ok = (close > latest['EMA_50']) and (close > latest['EMA_200'])
             if not trend_ok:
                 continue
                 
-            # 5. Trend Strength
-            momentum_ok = (latest['ADX_14'] > 20) and (latest['DMP_14'] > latest['DMN_14'])
+            # 5. Trend Strength (Relaxed ADX requirement to DMP > DMN only, since ADX lags fresh breakouts)
+            momentum_ok = (latest['DMP_14'] > latest['DMN_14'])
             if not momentum_ok:
                 continue
                 

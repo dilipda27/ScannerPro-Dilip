@@ -4,15 +4,31 @@ import json
 import logging
 import threading
 from datetime import datetime, timedelta
+# Suppress pandas FutureWarnings about DataFrame concatenation and other deprecations
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+import config
 
-_trader_lock = threading.Lock()
+_trader_lock = threading.RLock()
 
 PORTFOLIO_FILE = "paper_portfolio.csv"
 HISTORY_FILE = "paper_trade_history.csv"
 SWING_FILE = "swing_trades.csv"
 SWING_ARCHIVE_FILE = "swing_trades_archived.csv"
 ARCHIVE_FILE = "paper_trade_archive.csv"
+OPTIONS_HISTORY_FILE = "options_trade_history.csv"
+OPTIONS_ARCHIVE_FILE = "options_trade_archive.csv"
 _INSTRUMENT_CACHE_FILE = "_instrument_token_cache.json"
+
+def get_exchange_prefix(ticker):
+    """Determine the exchange (NSE/NFO/BFO) based on ticker name."""
+    ticker_str = str(ticker)
+    if any(ticker_str.endswith(x) for x in ["CE", "PE"]):
+        if ticker_str.startswith("SENSEX"):
+            return "BFO"
+        elif ticker_str.startswith("NIFTY") or ticker_str.startswith("BANKNIFTY") or ticker_str.startswith("FINNIFTY"):
+            return "NFO"
+    return "NSE"
 
 # ---------------------------------------------------------------------------
 # LIGHTWEIGHT INSTRUMENT TOKEN CACHE  (avoids repeated kite.instruments calls)
@@ -67,63 +83,71 @@ def _get_tokens_for(kite, symbols: list) -> dict:
     return {s: _instrument_cache[s] for s in symbols if s in _instrument_cache}
 
 def get_portfolio():
-    if not os.path.exists(PORTFOLIO_FILE):
-        return pd.DataFrame(columns=["Ticker", "Type", "EntryPrice", "SL", "Qty", "EntryTime", "Status", "Strategy"])
-    try:
-        df = pd.read_csv(PORTFOLIO_FILE)
-        # Migrate old 'OPEN' status to 'Active'
-        if not df.empty and 'Status' in df.columns:
-            if (df['Status'] == 'OPEN').any():
-                df.loc[df['Status'] == 'OPEN', 'Status'] = 'Active'
-                df.to_csv(PORTFOLIO_FILE, index=False) # Save migration
-        
-        # Migrate/Ensure Strategy column exists
-        if not df.empty and 'Strategy' not in df.columns:
-            df['Strategy'] = "15-Min ORB"
-            df.to_csv(PORTFOLIO_FILE, index=False)
+    with _trader_lock:
+        if not os.path.exists(PORTFOLIO_FILE):
+            return pd.DataFrame(columns=["Ticker", "Type", "EntryPrice", "SL", "InitialSL", "Qty", "EntryTime", "Status", "Strategy", "Delta"])
+        try:
+            df = pd.read_csv(PORTFOLIO_FILE)
+            # Migrate old 'OPEN' status to 'Active'
+            if not df.empty and 'Status' in df.columns:
+                if (df['Status'] == 'OPEN').any():
+                    df.loc[df['Status'] == 'OPEN', 'Status'] = 'Active'
+                    df.to_csv(PORTFOLIO_FILE, index=False) # Save migration
             
-        # Migrate/Ensure InitialSL column exists
-        if not df.empty and 'InitialSL' not in df.columns:
-            df['InitialSL'] = df['SL']
-            df.to_csv(PORTFOLIO_FILE, index=False)
-            
-        # Clean up any existing duplicates (same Ticker and Status)
-        if not df.empty:
-            df = df.drop_duplicates(subset=['Ticker', 'Status'], keep='first')
-            
-        return df
-    except:
-        return pd.DataFrame(columns=["Ticker", "Type", "EntryPrice", "SL", "InitialSL", "Qty", "EntryTime", "Status", "Strategy"])
+            # Migrate/Ensure Strategy column exists
+            if not df.empty and 'Strategy' not in df.columns:
+                df['Strategy'] = "15-Min ORB"
+                df.to_csv(PORTFOLIO_FILE, index=False)
+                
+            # Migrate/Ensure InitialSL column exists
+            if not df.empty and 'InitialSL' not in df.columns:
+                df['InitialSL'] = df['SL']
+                df.to_csv(PORTFOLIO_FILE, index=False)
+                
+            # Migrate/Ensure Delta column exists
+            if not df.empty and 'Delta' not in df.columns:
+                df['Delta'] = None
+                df.to_csv(PORTFOLIO_FILE, index=False)
+                
+            # Clean up any existing duplicates (same Ticker and Status)
+            if not df.empty:
+                df = df.drop_duplicates(subset=['Ticker', 'Status'], keep='first')
+                
+            return df
+        except:
+            return pd.DataFrame(columns=["Ticker", "Type", "EntryPrice", "SL", "InitialSL", "Qty", "EntryTime", "Status", "Strategy", "Delta"])
 
-def execute_paper_trade(ticker, trade_type, entry_price, sl, qty, token=None, strategy="15-Min ORB", target=None):
-    df = get_portfolio()
-    
-    # Check if already active in current session (avoid duplicate entries on same day)
-    # We only allow one active trade per ticker at a time
-    if not df.empty and ticker in df[df['Status'] == 'Active']['Ticker'].values:
-        return False
+def execute_paper_trade(ticker, trade_type, entry_price, sl, qty, token=None, strategy="15-Min ORB", target=None, delta=None):
+    with _trader_lock:
+        df = get_portfolio()
         
-    new_trade = {
-        "Ticker": ticker,
-        "Type": trade_type,
-        "EntryPrice": entry_price,
-        "SL": sl,
-        "InitialSL": sl,
-        "Target": target,
-        "Qty": qty,
-        "Token": token,
-        "EntryTime": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "Status": "Active",
-        "Strategy": strategy
-    }
-    
-    if df.empty:
-        df = pd.DataFrame([new_trade])
-    else:
-        df = pd.concat([df, pd.DataFrame([new_trade])], ignore_index=True)
-    df.to_csv(PORTFOLIO_FILE, index=False)
-    logging.info(f"🚀 Paper Trade Executed: {trade_type} ({strategy}) {ticker} @ {entry_price} (SL: {sl}, Target: {target}, Qty: {qty})")
-    return True
+        # Check if already active in current session (avoid duplicate entries on same day)
+        # We only allow one active trade per ticker at a time
+        if not df.empty and ticker in df[df['Status'] == 'Active']['Ticker'].values:
+            return False
+            
+        new_trade = {
+            "Ticker": ticker,
+            "Type": trade_type,
+            "EntryPrice": entry_price,
+            "SL": sl,
+            "InitialSL": sl,
+            "Target": target,
+            "Qty": qty,
+            "Token": token,
+            "EntryTime": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "Status": "Active",
+            "Strategy": strategy,
+            "Delta": delta
+        }
+        
+        if df.empty:
+            df = pd.DataFrame([new_trade])
+        else:
+            df = pd.concat([df, pd.DataFrame([new_trade])], ignore_index=True)
+        df.to_csv(PORTFOLIO_FILE, index=False)
+        logging.info(f"🚀 Paper Trade Executed: {trade_type} ({strategy}) {ticker} @ {entry_price} (SL: {sl}, Target: {target}, Qty: {qty})")
+        return True
 
 def exit_trade(ticker, kite, override_price=None):
     """Exit a trade, calculate final P&L, and move to history."""
@@ -143,8 +167,9 @@ def exit_trade(ticker, kite, override_price=None):
             if override_price is not None:
                 exit_price = override_price
             else:
-                quote = kite.ltp([f"NSE:{ticker}"])
-                exit_price = quote.get(f"NSE:{ticker}", {}).get('last_price')
+                exch = get_exchange_prefix(ticker)
+                quote = kite.ltp([f"{exch}:{ticker}"])
+                exit_price = quote.get(f"{exch}:{ticker}", {}).get('last_price')
             
             if exit_price is None:
                 logging.error(f"Could not fetch exit price for {ticker}")
@@ -157,7 +182,7 @@ def exit_trade(ticker, kite, override_price=None):
             actual_exit_price = exit_price
             if "Bullish" in str(trade['Type']) and sl > 0 and exit_price <= sl:
                 actual_exit_price = sl
-            elif "Bearish" in str(trade['Type']) and sl > 0 and exit_price >= sl:
+            elif ("Bearish" in str(trade['Type']) or "Failed Breakout" in str(trade['Type'])) and sl > 0 and exit_price >= sl:
                 actual_exit_price = sl
                 
             trade['ExitPrice'] = actual_exit_price
@@ -174,9 +199,12 @@ def exit_trade(ticker, kite, override_price=None):
             
             # Save to History (with duplicate checking to prevent multiple entries)
             history_df = pd.DataFrame([trade])
-            if os.path.exists(HISTORY_FILE):
+            is_option = str(trade.get('Strategy', '')).lower() in ['option desk', 'rolling straddle'] or (any(str(trade.get('Ticker', '')).endswith(x) for x in ["CE", "PE"]) and any(c.isdigit() for c in str(trade.get('Ticker', ''))))
+            dest_file = OPTIONS_HISTORY_FILE if is_option else HISTORY_FILE
+            
+            if os.path.exists(dest_file):
                 try:
-                    existing_history = pd.read_csv(HISTORY_FILE)
+                    existing_history = pd.read_csv(dest_file)
                     
                     # Prevent writing duplicate records for the same ticker and entry time
                     is_duplicate = False
@@ -193,14 +221,14 @@ def exit_trade(ticker, kite, override_price=None):
                             combined_history = history_df
                         else:
                             combined_history = pd.concat([existing_history, history_df], ignore_index=True, sort=False)
-                        combined_history.to_csv(HISTORY_FILE, index=False)
+                        combined_history.to_csv(dest_file, index=False)
                     else:
                         logging.warning(f"⚠️ exit_trade: Duplicate entry for {trade['Ticker']} (Entry: {trade['EntryTime']}) already exists in history. Skipping history append.")
                 except Exception as read_err:
                     logging.warning(f"Error appending history: {read_err}. Overwriting.")
-                    history_df.to_csv(HISTORY_FILE, index=False)
+                    history_df.to_csv(dest_file, index=False)
             else:
-                history_df.to_csv(HISTORY_FILE, index=False)
+                history_df.to_csv(dest_file, index=False)
                 
             # Update status and exit price in portfolio file instead of removing
             df.loc[(df['Ticker'] == ticker) & (df['Status'] == 'Active'), 'Current Price'] = actual_exit_price
@@ -222,34 +250,53 @@ def get_history():
     except:
         return pd.DataFrame()
 
+def get_options_history():
+    """Fetch archived options trades history."""
+    if not os.path.exists(OPTIONS_HISTORY_FILE):
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(OPTIONS_HISTORY_FILE)
+    except:
+        return pd.DataFrame()
+
 def archive_history():
     """Move daily history to permanent archive and clear daily file."""
-    if not os.path.exists(HISTORY_FILE):
-        return
-    
-    try:
-        df = pd.read_csv(HISTORY_FILE)
-        if df.empty:
-            return
-
-        # Append to archive
-        if os.path.exists(ARCHIVE_FILE):
-            df.to_csv(ARCHIVE_FILE, mode='a', header=False, index=False)
-        else:
-            df.to_csv(ARCHIVE_FILE, index=False)
-            
-        # Delete daily history file
-        os.remove(HISTORY_FILE)
-        logging.info(f"📁 Archived {len(df)} trades to {ARCHIVE_FILE}")
+    for hist_file, arch_file in [(HISTORY_FILE, ARCHIVE_FILE), (OPTIONS_HISTORY_FILE, OPTIONS_ARCHIVE_FILE)]:
+        if not os.path.exists(hist_file):
+            continue
         
-        # Also clean up the portfolio file (remove Closed trades from previous days)
-        if os.path.exists(PORTFOLIO_FILE):
+        try:
+            df = pd.read_csv(hist_file)
+            if df.empty:
+                continue
+    
+            # Append to archive (aligning columns properly)
+            if os.path.exists(arch_file):
+                try:
+                    arch_df = pd.read_csv(arch_file)
+                    combined = pd.concat([arch_df, df], ignore_index=True, sort=False)
+                    combined.to_csv(arch_file, index=False)
+                except Exception as e:
+                    logging.error(f"Error merging with archive {arch_file}, falling back to append: {e}")
+                    df.to_csv(arch_file, mode='a', header=False, index=False)
+            else:
+                df.to_csv(arch_file, index=False)
+                
+            # Delete daily history file
+            os.remove(hist_file)
+            logging.info(f"📁 Archived {len(df)} trades to {arch_file}")
+            
+        except Exception as e:
+            logging.error(f"Error archiving history file {hist_file}: {e}")
+            
+    # Also clean up the portfolio file (remove Closed trades from previous days)
+    if os.path.exists(PORTFOLIO_FILE):
+        try:
             pdf = pd.read_csv(PORTFOLIO_FILE)
             pdf = pdf[pdf['Status'] == 'Active'] # Only keep active trades for the new day
             pdf.to_csv(PORTFOLIO_FILE, index=False)
-            
-    except Exception as e:
-        logging.error(f"Error archiving history: {e}")
+        except Exception as e:
+            logging.error(f"Error cleaning up portfolio file: {e}")
 
 def clear_portfolio():
     """Clear all paper trades."""
@@ -289,7 +336,14 @@ def export_history_to_excel(excel_path="paper_trade_history.xlsx"):
             else:
                 pd.DataFrame(columns=["Status", "Message"]).to_excel(writer, sheet_name='Realized Today', index=False)
                 
-            # Sheet 3: Permanent Archive
+            # Sheet 3: Options Realized Today
+            opt_history_df = get_options_history()
+            if not opt_history_df.empty:
+                opt_history_df.to_excel(writer, sheet_name='Options Realized Today', index=False)
+            else:
+                pd.DataFrame(columns=["Status", "Message"]).to_excel(writer, sheet_name='Options Realized Today', index=False)
+                
+            # Sheet 4: Permanent Archive
             if os.path.exists(ARCHIVE_FILE):
                 try:
                     archive_df = pd.read_csv(ARCHIVE_FILE)
@@ -297,6 +351,15 @@ def export_history_to_excel(excel_path="paper_trade_history.xlsx"):
                         archive_df.to_excel(writer, sheet_name='Permanent Archive', index=False)
                 except Exception as arc_err:
                     logging.warning(f"Could not read permanent archive for excel export: {arc_err}")
+                    
+            # Sheet 5: Options Permanent Archive
+            if os.path.exists(OPTIONS_ARCHIVE_FILE):
+                try:
+                    opt_archive_df = pd.read_csv(OPTIONS_ARCHIVE_FILE)
+                    if not opt_archive_df.empty:
+                        opt_archive_df.to_excel(writer, sheet_name='Options Permanent Archive', index=False)
+                except Exception as arc_err:
+                    logging.warning(f"Could not read options permanent archive for excel export: {arc_err}")
                     
         logging.info(f"📊 Exported paper trade tables to {excel_path}")
         return True
@@ -353,7 +416,7 @@ def apply_multi_stage_trailing_sl(row, ltp):
             elif ltp >= entry + (1.0 * initial_risk):
                 if entry > current_sl: return entry
                 
-        elif "Bearish" in trade_type:
+        elif "Bearish" in trade_type or "Failed Breakout" in trade_type:
             initial_risk = initial_sl - entry
             if initial_risk <= 0: return current_sl
             
@@ -373,162 +436,332 @@ def apply_multi_stage_trailing_sl(row, ltp):
         
     return row['SL']
 
+def archive_and_clear_old_option_trades():
+    """
+    Finds closed option trades from previous days in paper_portfolio.csv,
+    ensures they are archived in paper_trade_history.csv and paper_trade_archive.csv,
+    and removes them from paper_portfolio.csv.
+    """
+    with _trader_lock:
+        if not os.path.exists(PORTFOLIO_FILE):
+            return
+            
+        try:
+            df = pd.read_csv(PORTFOLIO_FILE)
+            if df.empty:
+                return
+                
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            
+            # Identify option trades
+            def is_option_trade(row):
+                ticker = str(row.get('Ticker', ''))
+                strat = str(row.get('Strategy', ''))
+                return "Option" in strat or (any(ticker.endswith(x) for x in ["CE", "PE"]) and any(c.isdigit() for c in ticker))
+                
+            # Filter for closed option trades from previous days
+            to_clear_mask = []
+            for idx, row in df.iterrows():
+                if is_option_trade(row) and str(row.get('Status', '')).lower() == 'closed':
+                    # Parse exit date
+                    exit_time = str(row.get('ExitTime', ''))
+                    # If exit time is empty, fall back to EntryTime
+                    time_to_check = exit_time if exit_time else str(row.get('EntryTime', ''))
+                    
+                    if time_to_check:
+                        # Extract YYYY-MM-DD
+                        date_str = time_to_check.split(' ')[0]
+                        # If it's a previous day, or if it is today and we are past the end of the option trading window (15:15)
+                        now_dt = datetime.now()
+                        is_past_eod = now_dt.hour > 15 or (now_dt.hour == 15 and now_dt.minute >= 15)
+                        if date_str != today_str or is_past_eod:
+                            to_clear_mask.append(idx)
+                            
+            if not to_clear_mask:
+                return
+                
+            # Separate trades to clear
+            cleared_df = df.loc[to_clear_mask].copy()
+            
+            # Archive these trades in options_trade_history.csv (OPTIONS_HISTORY_FILE) and options_trade_archive.csv (OPTIONS_ARCHIVE_FILE)
+            for dest_file in [OPTIONS_HISTORY_FILE, OPTIONS_ARCHIVE_FILE]:
+                if os.path.exists(dest_file):
+                    try:
+                        dest_df = pd.read_csv(dest_file)
+                    except Exception:
+                        dest_df = pd.DataFrame()
+                else:
+                    dest_df = pd.DataFrame()
+                    
+                # Append cleared trades that aren't already present (check by Ticker & EntryTime)
+                for _, row in cleared_df.iterrows():
+                    if not dest_df.empty:
+                        dup = dest_df[(dest_df['Ticker'] == row['Ticker']) & (dest_df['EntryTime'] == row['EntryTime'])]
+                        if not dup.empty:
+                            continue
+                    dest_df = pd.concat([dest_df, pd.DataFrame([row.to_dict()])], ignore_index=True, sort=False)
+                    
+                dest_df.to_csv(dest_file, index=False)
+                
+            # Remove from portfolio and save
+            df = df.drop(to_clear_mask)
+            df.to_csv(PORTFOLIO_FILE, index=False)
+            logging.info(f"🧹 Archived and cleared {len(to_clear_mask)} old option trades from {PORTFOLIO_FILE}")
+            
+        except Exception as e:
+            logging.error(f"Error archiving and clearing old option trades: {e}")
+
 def update_portfolio_pnl(kite):
     """
     Fetches latest prices for all open trades and calculates P&L.
     Returns a DataFrame with live stats.
     """
-    try:
-        df = get_portfolio()
-        if df.empty:
-            return pd.DataFrame()
-        
-        # Split into Active and Closed
-        active_mask = df['Status'] == 'Active'
-        closed_mask = df['Status'] == 'Closed'
-        
-        active_trades = df[active_mask].copy()
-        closed_trades = df[closed_mask].copy()
-        
-        # --- AUTO-FIX MISSING TOKENS (cached — no repeat API calls) ---
-        if 'Token' not in active_trades.columns:
-            active_trades['Token'] = None
-
-        if active_trades['Token'].isna().any():
-            try:
-                missing_tickers = active_trades[active_trades['Token'].isna()]['Ticker'].tolist()
-                if missing_tickers:
-                    token_map = _get_tokens_for(kite, missing_tickers)
-                    for t_sym, t_val in token_map.items():
-                        df.loc[(df['Ticker'] == t_sym) & (df['Status'] == 'Active'), 'Token'] = t_val
-                        active_trades.loc[active_trades['Ticker'] == t_sym, 'Token'] = t_val
-                    df.to_csv(PORTFOLIO_FILE, index=False)
-            except Exception as e:
-                logging.warning(f"Intraday token auto-fix failed: {e}")
-                
-        # Calculate metrics for active trades
-        if not active_trades.empty:
-            tickers = active_trades['Ticker'].tolist()
-            try:
-                # Fetch LTP for all active tickers
-                quotes = kite.ltp([f"NSE:{t}" for t in tickers])
-                
-                def get_ltp(ticker):
-                    q = quotes.get(f"NSE:{ticker}")
-                    return q['last_price'] if q else None
+    with _trader_lock:
+        archive_and_clear_old_option_trades()
+        try:
+            df = get_portfolio()
+            if df.empty:
+                return pd.DataFrame()
+            
+            # Split into Active and Closed
+            active_mask = df['Status'] == 'Active'
+            closed_mask = df['Status'] == 'Closed'
+            
+            active_trades = df[active_mask].copy()
+            closed_trades = df[closed_mask].copy()
+            
+            # --- AUTO-FIX MISSING TOKENS (cached — no repeat API calls) ---
+            if 'Token' not in active_trades.columns:
+                active_trades['Token'] = None
+    
+            if active_trades['Token'].isna().any():
+                try:
+                    missing_tickers = active_trades[active_trades['Token'].isna()]['Ticker'].tolist()
+                    if missing_tickers:
+                        token_map = _get_tokens_for(kite, missing_tickers)
+                        for t_sym, t_val in token_map.items():
+                            df.loc[(df['Ticker'] == t_sym) & (df['Status'] == 'Active'), 'Token'] = t_val
+                            active_trades.loc[active_trades['Ticker'] == t_sym, 'Token'] = t_val
+                        df.to_csv(PORTFOLIO_FILE, index=False)
+                except Exception as e:
+                    logging.warning(f"Intraday token auto-fix failed: {e}")
                     
-                active_trades['Current Price'] = active_trades['Ticker'].apply(get_ltp)
-            except Exception as e:
-                logging.error(f"Error fetching LTP: {e}")
-
-        # Combine for processing P&L and charges
-        processed_df = pd.concat([active_trades, closed_trades], ignore_index=True)
-        if processed_df.empty:
-            return pd.DataFrame()
-
-        def calc_pnl(row):
-            if row['Current Price'] is None: return 0
-            price_for_pnl = row['Current Price']
-            sl = row['SL']
-            
-            # Use SL price if hit (to lock the P&L)
-            if "Bullish" in str(row['Type']) and price_for_pnl <= sl:
-                price_for_pnl = sl
-            elif "Bearish" in str(row['Type']) and price_for_pnl >= sl:
-                price_for_pnl = sl
+            # Calculate metrics for active trades
+            if not active_trades.empty:
+                tickers = active_trades['Ticker'].tolist()
+                try:
+                    # Fetch LTP for all active tickers
+                    quotes = kite.ltp([f"{get_exchange_prefix(t)}:{t}" for t in tickers])
+                    
+                    def get_ltp(ticker):
+                        exch = get_exchange_prefix(ticker)
+                        q = quotes.get(f"{exch}:{ticker}")
+                        return q['last_price'] if q else None
+                        
+                    active_trades['Current Price'] = active_trades['Ticker'].apply(get_ltp)
+                except Exception as e:
+                    logging.error(f"Error fetching LTP: {e}")
+    
+            # Combine for processing P&L and charges
+            processed_df = pd.concat([active_trades, closed_trades], ignore_index=True)
+            if processed_df.empty:
+                return pd.DataFrame()
+    
+            def calc_pnl(row):
+                if row['Current Price'] is None: return 0
+                price_for_pnl = row['Current Price']
+                sl = row['SL']
                 
-            if "Bullish" in str(row['Type']):
-                return (price_for_pnl - row['EntryPrice']) * row['Qty']
-            else:
-                return (row['EntryPrice'] - price_for_pnl) * row['Qty']
-                
-        processed_df['Live P&L'] = processed_df.apply(calc_pnl, axis=1)
-        
-        # Check for SL hits and Auto-Exit (Only for Active ones)
-        processed_df['SL Status'] = "✅ Active"
-        for idx, row in processed_df.iterrows():
-            if row['Status'] == 'Closed':
-                processed_df.at[idx, 'SL Status'] = "🏁 Closed"
-                continue
-                
-            # --- TRAILING SL LOGIC (Multi-Stage R-Based) ---
-            if row['Status'] == 'Active' and row['Current Price'] is not None:
-                entry = row['EntryPrice']
-                current_sl = row['SL']
-                ltp = row['Current Price']
-                
-                new_sl = apply_multi_stage_trailing_sl(row, ltp)
-                if new_sl != current_sl:
-                    df.loc[(df['Ticker'] == row['Ticker']) & (df['Status'] == 'Active'), 'SL'] = new_sl
-                    processed_df.at[idx, 'SL'] = new_sl
-                    row['SL'] = new_sl # Update for the hit check below
-                    df.to_csv(PORTFOLIO_FILE, index=False) # Persist trail
-                    logging.info(f"🛡️ Multi-Stage Trail: {row['Ticker']} Stop-Loss moved from ₹{current_sl:.2f} to ₹{new_sl:.2f} (Entry: ₹{entry:.2f}, LTP: ₹{ltp:.2f})")
-
-            is_hit = False
-            exit_reason = "SL Hit"
-            sl = row['SL']
-            target = row.get('Target')
-            
-            # 1. Check Stop Loss
-            if "Bullish" in str(row['Type']) and row['Current Price'] is not None and row['Current Price'] <= sl:
-                is_hit = True
-                exit_reason = "SL Hit"
-            elif "Bearish" in str(row['Type']) and row['Current Price'] is not None and row['Current Price'] >= sl:
-                is_hit = True
-                exit_reason = "SL Hit"
-                
-            # 2. Check Target (if defined in portfolio records)
-            elif target is not None and pd.notna(target):
-                target = float(target)
-                if "Bullish" in str(row['Type']) and row['Current Price'] is not None and row['Current Price'] >= target:
-                    is_hit = True
-                    exit_reason = "Target Hit"
-                elif "Bearish" in str(row['Type']) and row['Current Price'] is not None and row['Current Price'] <= target:
-                    is_hit = True
-                    exit_reason = "Target Hit"
-            
-            if is_hit:
-                if exit_reason == "Target Hit":
-                    logging.info(f"🎯 Target Hit for {row['Ticker']}. Auto-exiting at ₹{target:.2f}")
-                    exit_trade(row['Ticker'], kite, override_price=target)
-                    processed_df.at[idx, 'SL Status'] = "🎯 TARGET HIT (EXITED)"
-                    processed_df.at[idx, 'Status'] = "Closed"
-                    processed_df.at[idx, 'Current Price'] = target
+                # Use SL price if hit (to lock the P&L)
+                if "Bullish" in str(row['Type']) and price_for_pnl <= sl:
+                    price_for_pnl = sl
+                elif ("Bearish" in str(row['Type']) or "Failed Breakout" in str(row['Type']) or ("Options Selling" in str(row['Type']) and row.get('Strategy') != 'Option Desk')) and price_for_pnl >= sl:
+                    price_for_pnl = sl
+                    
+                if "Bullish" in str(row['Type']):
+                    return (price_for_pnl - row['EntryPrice']) * row['Qty']
                 else:
-                    logging.info(f"🚨 SL Hit for {row['Ticker']}. Auto-exiting at ₹{sl:.2f}")
-                    exit_trade(row['Ticker'], kite, override_price=sl)
-                    processed_df.at[idx, 'SL Status'] = "❌ SL HIT (EXITED)"
-                    processed_df.at[idx, 'Status'] = "Closed"
-                    processed_df.at[idx, 'Current Price'] = sl
-
-
-        # --- ESTIMATED ZERODHA INTRADAY CHARGES ---
-        def calc_intraday_charges(row):
-            if row['Current Price'] is None: return 0
-            buy_val = row['EntryPrice'] * row['Qty']
-            sell_val = row['Current Price'] * row['Qty']
-            turnover = buy_val + sell_val
-            brok = min(20, 0.0003 * buy_val) + min(20, 0.0003 * sell_val)
-            stt = 0.00025 * sell_val
-            trans = 0.0000345 * turnover
-            gst = 0.18 * (brok + trans)
-            sebi = (turnover / 10000000) * 10
-            stamp = 0.00003 * buy_val
-            return brok + stt + trans + gst + sebi + stamp
-
-        processed_df['Est. Charges'] = processed_df.apply(calc_intraday_charges, axis=1)
-        processed_df['Net P&L'] = processed_df['Live P&L'] - processed_df['Est. Charges']
-        
-        # Ensure Strategy is present in processed_df
-        if 'Strategy' not in processed_df.columns:
-            processed_df['Strategy'] = "15-Min ORB"
+                    return (row['EntryPrice'] - price_for_pnl) * row['Qty']
+                    
+            processed_df['Live P&L'] = processed_df.apply(calc_pnl, axis=1)
             
-        return processed_df[["Ticker", "Type", "Strategy", "EntryPrice", "Current Price", "Qty", "SL", "SL Status", "Status", "Live P&L", "Est. Charges", "Net P&L", "EntryTime", "Token"]]
-        
-    except Exception as e:
-        logging.error(f"Error updating portfolio P&L: {e}")
-        return pd.DataFrame()
+            # Check for SL hits and Auto-Exit (Only for Active ones)
+            processed_df['SL Status'] = "✅ Active"
+            for idx, row in processed_df.iterrows():
+                if row['Status'] == 'Closed':
+                    processed_df.at[idx, 'SL Status'] = "🏁 Closed"
+                    continue
+                    
+                # --- TRAILING SL LOGIC (Multi-Stage R-Based) ---
+                if row['Status'] == 'Active' and row['Current Price'] is not None:
+                    entry = row['EntryPrice']
+                    current_sl = row['SL']
+                    ltp = row['Current Price']
+                    
+                    new_sl = apply_multi_stage_trailing_sl(row, ltp)
+                    if new_sl != current_sl:
+                        df.loc[(df['Ticker'] == row['Ticker']) & (df['Status'] == 'Active'), 'SL'] = new_sl
+                        processed_df.at[idx, 'SL'] = new_sl
+                        row['SL'] = new_sl # Update for the hit check below
+                        df.to_csv(PORTFOLIO_FILE, index=False) # Persist trail
+                        logging.info(f"🛡️ Multi-Stage Trail: {row['Ticker']} Stop-Loss moved from ₹{current_sl:.2f} to ₹{new_sl:.2f} (Entry: ₹{entry:.2f}, LTP: ₹{ltp:.2f})")
+    
+                is_hit = False
+                exit_reason = "SL Hit"
+                sl = row['SL']
+                target = row.get('Target')
+                
+                # 1. Check Stop Loss
+                if "Bullish" in str(row['Type']) and row['Current Price'] is not None and row['Current Price'] <= sl:
+                    is_hit = True
+                    exit_reason = "SL Hit"
+                elif ("Bearish" in str(row['Type']) or "Failed Breakout" in str(row['Type']) or ("Options Selling" in str(row['Type']) and row.get('Strategy') != 'Option Desk')) and row['Current Price'] is not None and row['Current Price'] >= sl:
+                    is_hit = True
+                    exit_reason = "SL Hit"
+                    
+                # 2. Check Target (if defined in portfolio records)
+                elif target is not None and pd.notna(target):
+                    target = float(target)
+                    if "Bullish" in str(row['Type']) and row['Current Price'] is not None and row['Current Price'] >= target:
+                        is_hit = True
+                        exit_reason = "Target Hit"
+                    elif ("Bearish" in str(row['Type']) or "Failed Breakout" in str(row['Type'])) and row['Current Price'] is not None and row['Current Price'] <= target:
+                        is_hit = True
+                        exit_reason = "Target Hit"
+                
+                if is_hit:
+                    if exit_reason == "Target Hit":
+                        logging.info(f"🎯 Target Hit for {row['Ticker']}. Auto-exiting at ₹{target:.2f}")
+                        exit_trade(row['Ticker'], kite, override_price=target)
+                        processed_df.at[idx, 'SL Status'] = "🎯 TARGET HIT (EXITED)"
+                        processed_df.at[idx, 'Status'] = "Closed"
+                        processed_df.at[idx, 'Current Price'] = target
+                    else:
+                        logging.info(f"🚨 SL Hit for {row['Ticker']}. Auto-exiting at ₹{sl:.2f}")
+                        exit_trade(row['Ticker'], kite, override_price=sl)
+                        processed_df.at[idx, 'SL Status'] = "❌ SL HIT (EXITED)"
+                        processed_df.at[idx, 'Status'] = "Closed"
+                        processed_df.at[idx, 'Current Price'] = sl
+    
+    
+            # --- ESTIMATED ZERODHA INTRADAY CHARGES ---
+            def calc_intraday_charges(row):
+                if row['Current Price'] is None: return 0
+                buy_val = row['EntryPrice'] * row['Qty']
+                sell_val = row['Current Price'] * row['Qty']
+                turnover = buy_val + sell_val
+                
+                # Check if this is an option trade
+                is_option = "Option" in str(row.get('Strategy', '')) or any(str(row['Ticker']).endswith(x) for x in ["CE", "PE"])
+                
+                if is_option:
+                    if row.get('Status') == 'Closed':
+                        brok = 20.0 + 20.0
+                        stt = 0.000625 * buy_val  # STT 0.0625% on sell side premium
+                        trans = 0.00053 * turnover # Trans charges ~0.053% of premium turnover
+                        gst = 0.18 * (brok + trans) # GST is 18% of brokerage + transaction charges
+                        sebi = (turnover / 10000000) * 10
+                        stamp = 0.00003 * sell_val # Stamp duty 0.003% on buy/exit premium
+                        return brok + stt + trans + gst + sebi + stamp
+                    else:
+                        brok = 20.0
+                        stt = 0.000625 * buy_val  # STT on entry sell premium
+                        trans = 0.00053 * buy_val # Trans charges on entry
+                        gst = 0.18 * (brok + trans)
+                        sebi = (buy_val / 10000000) * 10
+                        stamp = 0.0
+                        return brok + stt + trans + gst + sebi + stamp
+                else:
+                    brok = min(20, 0.0003 * buy_val) + min(20, 0.0003 * sell_val)
+                    stt = 0.00025 * sell_val
+                    trans = 0.0000345 * turnover
+                    gst = 0.18 * (brok + trans)
+                    sebi = (turnover / 10000000) * 10
+                    stamp = 0.00003 * buy_val
+                    return brok + stt + trans + gst + sebi + stamp
+    
+            processed_df['Est. Charges'] = processed_df.apply(calc_intraday_charges, axis=1)
+            processed_df['Net P&L'] = processed_df['Live P&L'] - processed_df['Est. Charges']
+    
+            # --- ESTIMATED OPTION MARGINS (CAPITAL DEPLOYED) ---
+            processed_df['Margin Required'] = 0.0
+            
+            # Filter for active option trades
+            active_options = processed_df[(processed_df['Status'] == 'Active') & 
+                                          (processed_df['Ticker'].apply(lambda t: any(str(t).endswith(x) for x in ["CE", "PE"])))].copy()
+                                          
+            # Group active options by underlying index (e.g. SENSEX vs NIFTY)
+            underlying_groups = {}
+            for idx, row in active_options.iterrows():
+                ticker = row['Ticker']
+                und = "SENSEX" if ticker.startswith("SENSEX") else ("NIFTY" if ticker.startswith("NIFTY") else "OTHER")
+                if und not in underlying_groups:
+                    underlying_groups[und] = []
+                underlying_groups[und].append((idx, row))
+                
+            for und, items in underlying_groups.items():
+                qty = items[0][1]['Qty']
+                exch = "BFO" if und == "SENSEX" else "NFO"
+                import config
+                lot_size = getattr(config, 'LOT_SIZE_SENSEX', 20) if und == "SENSEX" else getattr(config, 'LOT_SIZE_NIFTY', 65)
+                lots = qty / lot_size
+                
+                # Check if both CE and PE are active in this group (for hedging/netting fallback)
+                has_ce = any("CE" in item[1]['Ticker'] for item in items)
+                has_pe = any("PE" in item[1]['Ticker'] for item in items)
+                both_sides = has_ce and has_pe
+                
+                success = False
+                try:
+                    orders = []
+                    for _, row in items:
+                        orders.append({
+                            "exchange": exch,
+                            "tradingsymbol": row['Ticker'],
+                            "transaction_type": "SELL",
+                            "variety": "regular",
+                            "product": "NRML",
+                            "order_type": "MARKET",
+                            "quantity": int(row['Qty'])
+                        })
+                    # Call basket margins API to get exact portfolio-netted/hedged margin
+                    res = kite.basket_margins(orders)
+                    if res and "final" in res and "total" in res["final"]:
+                        total_margin = float(res["final"]["total"])
+                        # Distribute netted margin equally among active positions in the group
+                        for idx, _ in items:
+                            processed_df.at[idx, 'Margin Required'] = total_margin / len(items)
+                        success = True
+                except Exception as me:
+                    logging.error(f"Error fetching basket margin for {und}: {me}")
+                    
+                if not success:
+                    # Fallback: Hedged CE+PE margin is ~1.1x of a single leg margin rather than 2.0x
+                    multiplier = 1.1 if both_sides else 1.0
+                    total_margin = float(lots * 200000.0 * multiplier)
+                    for idx, _ in items:
+                        processed_df.at[idx, 'Margin Required'] = total_margin / len(items)
+                        
+            # Calculate capital for standard non-option active trades
+            for idx, row in processed_df.iterrows():
+                if row['Status'] == 'Active':
+                    is_option = "Option" in str(row.get('Strategy', '')) or any(str(row['Ticker']).endswith(x) for x in ["CE", "PE"])
+                    if not is_option:
+                        processed_df.at[idx, 'Margin Required'] = float(row['EntryPrice'] * row['Qty'])
+            
+            # Ensure Strategy is present in processed_df
+            if 'Strategy' not in processed_df.columns:
+                processed_df['Strategy'] = "15-Min ORB"
+                
+            # Ensure Delta is present in processed_df
+            if 'Delta' not in processed_df.columns:
+                processed_df['Delta'] = None
+                
+            return processed_df[["Ticker", "Type", "Strategy", "EntryPrice", "Current Price", "Qty", "SL", "SL Status", "Status", "Live P&L", "Est. Charges", "Net P&L", "EntryTime", "Token", "Margin Required", "Delta"]]
+            
+        except Exception as e:
+            logging.error(f"Error updating portfolio P&L: {e}")
+            return pd.DataFrame()
 
 # --- POSITIONAL SWING TRADING (3:15 PM) ---
 
@@ -986,3 +1219,127 @@ def get_swing_equity_curve(kite=None):
     df_aggregated['Cumulative P&L'] = df_aggregated['P&L'].cumsum()
     
     return df_aggregated
+
+
+INTRADAY_PNL_LOG_FILE = "options_intraday_pnl_log.csv"
+
+def log_intraday_pnl_snapshot(kite):
+    """
+    Computes active/realized options strategies P&L and logs a snapshot to INTRADAY_PNL_LOG_FILE.
+    Runs in background cycles from strategy managers.
+    """
+    if kite is None:
+        return
+        
+    try:
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+        
+        # Load or create file, keeping only today's data to avoid bloat
+        existing_df = pd.DataFrame()
+        if os.path.exists(INTRADAY_PNL_LOG_FILE):
+            try:
+                existing_df = pd.read_csv(INTRADAY_PNL_LOG_FILE)
+                if not existing_df.empty and 'Timestamp' in existing_df.columns:
+                    existing_df['Date'] = existing_df['Timestamp'].apply(lambda x: str(x).split(' ')[0])
+                    existing_df = existing_df[existing_df['Date'] == today_str].drop(columns=['Date'])
+            except Exception as e:
+                logging.error(f"Error reading existing intraday P&L log: {e}")
+                
+        # Gather active option positions from the portfolio
+        portfolio_df = get_portfolio()
+        if portfolio_df.empty:
+            active_options = pd.DataFrame()
+        else:
+            active_options = portfolio_df[
+                (portfolio_df['Status'] == 'Active') & 
+                ((portfolio_df['Strategy'].isin(['Option Desk', 'Rolling Straddle'])) | 
+                 (portfolio_df['Ticker'].apply(lambda t: any(str(t).endswith(x) for x in ["CE", "PE"]))))
+            ].copy()
+            
+        # Get quotes for spot prices
+        spot_nifty = 0.0
+        spot_sensex = 0.0
+        try:
+            quotes = kite.quote(["NSE:NIFTY 50", "BSE:SENSEX"])
+            spot_nifty = quotes.get("NSE:NIFTY 50", {}).get('last_price', 0.0)
+            spot_sensex = quotes.get("BSE:SENSEX", {}).get('last_price', 0.0)
+        except Exception as qe:
+            logging.error(f"LTP fetch error in PnL logger: {qe}")
+            
+        strategies = ['Option Desk', 'Rolling Straddle']
+        new_rows = []
+        
+        for strat in strategies:
+            realized = 0.0
+            if strat == 'Option Desk':
+                import option_desk_manager
+                try:
+                    realized = option_desk_manager.load_state().get("realized_pnl", 0.0)
+                except Exception:
+                    pass
+            elif strat == 'Rolling Straddle':
+                import rolling_straddle_manager
+                try:
+                    realized = rolling_straddle_manager.load_state().get("realized_pnl", 0.0)
+                except Exception:
+                    pass
+                    
+            strat_active = active_options[active_options['Strategy'] == strat] if not active_options.empty else pd.DataFrame()
+            unrealized = 0.0
+            capital = 0.0
+            
+            if not strat_active.empty:
+                tickers = strat_active['Ticker'].tolist()
+                exch_tickers = []
+                for t in tickers:
+                    exch = "BFO" if t.startswith("SENSEX") else "NFO"
+                    exch_tickers.append(f"{exch}:{t}")
+                    
+                opt_quotes = {}
+                try:
+                    opt_quotes = kite.quote(exch_tickers)
+                except Exception:
+                    pass
+                    
+                for _, row in strat_active.iterrows():
+                    t = row['Ticker']
+                    exch = "BFO" if t.startswith("SENSEX") else "NFO"
+                    ltp = opt_quotes.get(f"{exch}:{t}", {}).get('last_price', row['EntryPrice'])
+                    qty = row['Qty']
+                    
+                    # selling premium calculation: entry - current
+                    unrealized += (row['EntryPrice'] - ltp) * qty
+                    
+                    margin_req = row.get('Margin Required', 0.0)
+                    if pd.isna(margin_req) or margin_req == 0.0:
+                        is_nifty = t.startswith("NIFTY")
+                        lot_size = getattr(config, 'LOT_SIZE_NIFTY', 65) if is_nifty else getattr(config, 'LOT_SIZE_SENSEX', 20)
+                        lots = qty / lot_size
+                        margin_req = lots * 200000.0 # Fallback margin per lot
+                    capital += margin_req
+                    
+            total_pnl = realized + unrealized
+            spot = spot_nifty if strat_active.empty or not strat_active.iloc[0]['Ticker'].startswith("SENSEX") else spot_sensex
+            
+            new_rows.append({
+                "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "Strategy": strat,
+                "SpotPrice": spot,
+                "RealizedPnL": round(realized, 2),
+                "UnrealizedPnL": round(unrealized, 2),
+                "TotalPnL": round(total_pnl, 2),
+                "CapitalDeployed": round(capital, 2)
+            })
+            
+        new_df = pd.DataFrame(new_rows)
+        if not existing_df.empty:
+            combined = pd.concat([existing_df, new_df], ignore_index=True)
+        else:
+            combined = new_df
+            
+        combined.to_csv(INTRADAY_PNL_LOG_FILE, index=False)
+        
+    except Exception as e:
+        logging.error(f"Error logging intraday P&L snapshot: {e}", exc_info=True)
+
