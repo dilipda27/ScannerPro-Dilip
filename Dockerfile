@@ -1,5 +1,6 @@
 # Use official Python slim image for a compact build
-FROM python:3.11-slim
+#FROM python:3.11-slim
+FROM python:3.12-slim
 
 # Set environment variables to optimize Python performance
 ENV PYTHONDONTWRITEBYTECODE=1

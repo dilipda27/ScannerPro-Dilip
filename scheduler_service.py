@@ -60,12 +60,12 @@ def get_kite_instance():
         return None
 
 def is_market_open():
-    """Check if today is a weekday and current time is within market hours (9:15-15:30)."""
+    """Check if today is a weekday and current time is within market hours (9:15-14:45)."""
     now = datetime.datetime.now()
     if now.weekday() > 4: # Weekend
         return False
     market_start = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    market_end = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    market_end = now.replace(hour=14, minute=45, second=0, microsecond=0)
     return market_start <= now <= market_end
 
 def run_automated_orb(scan_label):
@@ -315,10 +315,10 @@ def run_ai_position_advisor():
     if now.weekday() > 4: # Weekend
         return
         
-    # Time filter: 9:45 AM to 3:25 PM
+    # Time filter: 9:45 AM to 2:45 PM
     current_time = now.time()
     start_time = datetime.time(9, 45)
-    end_time = datetime.time(15, 25)
+    end_time = datetime.time(14, 45)
     if not (start_time <= current_time <= end_time):
         return
         
@@ -649,13 +649,13 @@ schedule.every().day.at("09:31").do(run_automated_orb, scan_label="Initial 9:31 
 # 10:00 AM IST - Follow-up Sustainability Scan
 schedule.every().day.at("10:00").do(run_automated_orb, scan_label="Sustainability 10:00 AM")
 
-# Continuous 52WH Scan (Every 5 minutes between 9:45 and 15:30)
+# Continuous 52WH Scan (Every 5 minutes between 9:45 and 14:45)
 schedule.every(5).minutes.do(run_automated_52wh)
 
-# Continuous Bearish VWAP Rejection Scan (Every 5 minutes between 9:45 and 15:30)
+# Continuous Bearish VWAP Rejection Scan (Every 5 minutes between 9:45 and 14:45)
 schedule.every(5).minutes.do(run_automated_bearish_vwap_rejection)
 
-# AI Advisor Active Positions monitor (Every 10 minutes between 9:45 AM and 3:25 PM)
+# AI Advisor Active Positions monitor (Every 10 minutes between 9:45 AM and 2:45 PM)
 schedule.every(10).minutes.do(run_ai_position_advisor)
 
 # 3:25 PM IST - Auto Square-off

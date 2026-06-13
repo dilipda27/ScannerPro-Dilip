@@ -209,7 +209,11 @@ def websocket_feeder_thread(api_key, access_token, underlying_token):
             ticker_instance.reconnect = True
             
             logging.info("Attempting WebSocket connection...")
-            ticker_instance.connect(threaded=False)
+            ticker_instance.connect(threaded=True)
+            
+            # Keep thread alive to avoid creating new connections continuously
+            while not stop_event.is_set() and system_state["is_running"]:
+                stop_event.wait(1)
         except Exception as e:
             if stop_event.is_set(): break
             logging.error(f"WebSocket Connection Failed: {e}. Retrying in 10s...")
@@ -588,8 +592,10 @@ def execute_bot_recommendation(kite, index_name):
             token = row.iloc[0]['instrument_token']
             try:
                 ltp = kite.ltp([f"NFO:{sym}"] if index_name == "NIFTY" else [f"BFO:{sym}"])[f"{'NFO' if index_name == 'NIFTY' else 'BFO'}:{sym}"]['last_price']
-                # Qty: 1 lot (50 for Nifty, 10 for Sensex - simplify to 50/10)
-                qty = 50 if index_name == "NIFTY" else 10
+                # Qty: 3 lots
+                nifty_lot = getattr(config, 'LOT_SIZE_NIFTY', 65)
+                sensex_lot = getattr(config, 'LOT_SIZE_SENSEX', 20)
+                qty = 3 * nifty_lot if index_name == "NIFTY" else 3 * sensex_lot
                 paper_trader.execute_paper_trade(
                     ticker=sym,
                     trade_type=f"Options Selling ({trade_label})",

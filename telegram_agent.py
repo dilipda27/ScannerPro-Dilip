@@ -119,7 +119,13 @@ def send_portfolio_report(portfolio_df: pd.DataFrame, bot_token: str, chat_id: s
     
     # Total P&L is the sum of active net P&L and realized net P&L (matches dashboard's total net P&L)
     total_pnl = net_live_pnl + total_realized_pnl
-    total_capital = (portfolio_df['EntryPrice'] * portfolio_df['Qty']).sum()
+    if 'Margin Required' in portfolio_df.columns:
+        total_capital = portfolio_df.apply(
+            lambda r: r['Margin Required'] if r['Status'] == 'Active' else (r['EntryPrice'] * r['Qty']),
+            axis=1
+        ).sum()
+    else:
+        total_capital = (portfolio_df['EntryPrice'] * portfolio_df['Qty']).sum()
     total_roi = (total_pnl / total_capital * 100) if total_capital > 0 else 0
     
     header = "📊 *Current Portfolio Summary*\n"

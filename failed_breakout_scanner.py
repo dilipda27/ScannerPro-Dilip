@@ -304,8 +304,8 @@ def scan_failed_breakouts(kite, progress_callback=None):
             
             # Combine all conditions (incorporating the new consecutive_above and bearish rejection shape filters)
             if is_trap_triggered and is_bearish_shape and is_bearish_rejection and (consecutive_above <= 4) and vol_spike and below_vwap and not_oversold and not is_chasing:
-                # Active Trading Hours (Post-9:30 AM and Before 3:00 PM)
-                if datetime.time(9, 30) <= to_date.time() <= datetime.time(15, 0):
+                # Active Trading Hours (Post-9:30 AM and Before 2:45 PM)
+                if datetime.time(9, 30) <= to_date.time() <= datetime.time(14, 45):
                     # Risk Management parameters
                     entry_price = ltp
                     qty = int(250000 / entry_price)
@@ -348,7 +348,7 @@ def scan_failed_breakouts(kite, progress_callback=None):
                         "RSI (5m)": round(latest_rsi, 2),
                         "Stop Loss": "-",
                         "Target": "-",
-                        "Status": "Closed for Day" if to_date.time() > datetime.time(15, 0) else "Monitoring",
+                        "Status": "Closed for Day" if to_date.time() > datetime.time(14, 45) else "Monitoring",
                         "Token": token
                     })
             else:
@@ -365,7 +365,7 @@ def scan_failed_breakouts(kite, progress_callback=None):
                     "RSI (5m)": round(latest_rsi, 2),
                     "Stop Loss": "-",
                     "Target": "-",
-                    "Status": "Closed for Day" if to_date.time() > datetime.time(15, 0) else "Monitoring",
+                    "Status": "Closed for Day" if to_date.time() > datetime.time(14, 45) else "Monitoring",
                     "Token": token
                 })
         except Exception as e:

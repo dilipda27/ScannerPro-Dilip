@@ -318,8 +318,8 @@ def scan_bearish_breakdowns(kite, progress_callback=None):
             is_chasing = slippage_pct > 0.4
             
             if vol_spike and below_vwap and not is_chasing and not is_oversold and not is_extended and candle_ok and (not nifty_bullish) and is_consolidating:
-                # If Post-9:30 and BEFORE 15:00 (3 PM) and Breakdown Triggered
-                if datetime.time(9, 30) <= to_date.time() <= datetime.time(15, 0) and is_breakdown:
+                # If Post-9:30 and BEFORE 2:45 PM and Breakdown Triggered
+                if datetime.time(9, 30) <= to_date.time() <= datetime.time(14, 45) and is_breakdown:
 
                     # Risk Management (Capital: 250,000 per trade)
                     # Retest limit entry: enter at breakdown_level if touch occurred, else close
@@ -362,7 +362,7 @@ def scan_bearish_breakdowns(kite, progress_callback=None):
                         "VWAP": round(vwap, 2),
                         "Stop Loss": "-",
                         "Target": "-",
-                        "Status": "Closed for Day" if to_date.time() > datetime.time(15, 0) else "Monitoring",
+                        "Status": "Closed for Day" if to_date.time() > datetime.time(14, 45) else "Monitoring",
                         "Token": token
                     })
 

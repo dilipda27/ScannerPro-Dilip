@@ -84,32 +84,93 @@ def fetch_nifty500_symbols():
     Includes a robust fallback list of highly liquid tickers in case of NSE timeout.
     """
     logging.info("📡 Fetching Nifty F&O symbols from NSE...")
+    import os
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    cache_500 = "nifty500_local_cache.csv"
+    cache_fno = "fo_mktlots_local_cache.csv"
     
     # 1. Fetch Nifty 500
     nifty500_symbols = set()
     try:
         response = requests.get(NIFTY500_URL, headers=headers, timeout=10)
-        df = pd.read_csv(io.StringIO(response.text))
+        response.raise_for_status()
+        text_500 = response.text
+        # Save to cache
+        with open(cache_500, "w", encoding="utf-8") as f:
+            f.write(text_500)
+        df = pd.read_csv(io.StringIO(text_500))
         nifty500_symbols = set(df['Symbol'].str.strip().tolist())
     except Exception as e:
-        logging.warning(f"⚠️ Failed to fetch Nifty 500 from NSE: {e}. Using fallback.")
-        nifty500_symbols = {"RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"}
+        logging.warning(f"⚠️ Failed to fetch Nifty 500 from NSE: {e}. Trying local cache...")
+        if os.path.exists(cache_500):
+            try:
+                df = pd.read_csv(cache_500)
+                nifty500_symbols = set(df['Symbol'].str.strip().tolist())
+                logging.info("Loaded Nifty 500 from local cache.")
+            except Exception as ce:
+                logging.error(f"Failed to read Nifty 500 cache: {ce}")
+        
+        if not nifty500_symbols:
+            nifty500_symbols = {
+                "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "BHARTIARTL", "SBI", "LICI",
+                "ITC", "HINDUNILVR", "LT", "BAJFINANCE", "HCLTECH", "MARUTI", "SUNPHARMA",
+                "ADANIENT", "KOTAKBANK", "AXISBANK", "TITAN", "ULTRACEMCO", "NTPC", "TATAMOTORS",
+                "ONGC", "POWERGRID", "ASIANPAINT", "COALINDIA", "JSWSTEEL", "M&M", "TRENT",
+                "NESTLEIND", "TATACHEM", "HINDALCO", "BPCL", "GRASIM", "WIPRO", "TECHM",
+                "HDFCLIFE", "SBILIFE", "DRREDDY", "IOC", "CIPLA", "EICHERMOT", "DIVISLAB",
+                "INDUSINDBK", "SBICARD", "MUTHOOTFIN", "APOLLOHOSP", "HEROMOTOCO", "SHRIRAMFIN"
+            }
         
     # 2. Fetch FNO List
     url_fno = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
     fno_symbols = set()
     try:
         r_fno = requests.get(url_fno, headers=headers, timeout=10)
-        for line in r_fno.text.split('\n'):
+        r_fno.raise_for_status()
+        text_fno = r_fno.text
+        # Save to cache
+        with open(cache_fno, "w", encoding="utf-8") as f:
+            f.write(text_fno)
+        for line in text_fno.split('\n'):
             parts = line.split(',')
             if len(parts) > 2:
                 sym = parts[1].strip()
                 if sym and sym != "SYMBOL":
                     fno_symbols.add(sym)
     except Exception as e:
-        logging.error(f"Error fetching FNO list: {e}")
-        fno_symbols = nifty500_symbols  # Fallback
+        logging.error(f"Error fetching FNO list from NSE: {e}. Trying local cache...")
+        loaded_fno_cache = False
+        if os.path.exists(cache_fno):
+            try:
+                with open(cache_fno, "r", encoding="utf-8") as f:
+                    for line in f.read().split('\n'):
+                        parts = line.split(',')
+                        if len(parts) > 2:
+                            sym = parts[1].strip()
+                            if sym and sym != "SYMBOL":
+                                fno_symbols.add(sym)
+                if fno_symbols:
+                    logging.info("Loaded FNO list from local cache.")
+                    loaded_fno_cache = True
+            except Exception as ce:
+                logging.error(f"Failed to read FNO cache: {ce}")
+                
+        if not loaded_fno_cache:
+            # Parse FNO list from local kite_instruments_nfo.csv if available
+            kite_inst_file = "kite_instruments_nfo.csv"
+            if os.path.exists(kite_inst_file):
+                try:
+                    df_inst = pd.read_csv(kite_inst_file)
+                    nfo_fno_syms = df_inst[df_inst['segment'] == 'NFO-FUT']['name'].dropna().unique()
+                    for sym in nfo_fno_syms:
+                        fno_symbols.add(sym.strip())
+                    if fno_symbols:
+                        logging.info(f"Loaded {len(fno_symbols)} FNO symbols from {kite_inst_file}")
+                except Exception as ie:
+                    logging.error(f"Failed to load FNO symbols from kite instruments: {ie}")
+                    
+        if not fno_symbols:
+            fno_symbols = nifty500_symbols
         
     final_symbols = nifty500_symbols.intersection(fno_symbols)
     logging.info(f"✅ Successfully retrieved and filtered {len(final_symbols)} F&O symbols.")
@@ -499,9 +560,9 @@ class IntradayLiveMonitor:
 
     def on_ticks(self, ws, ticks):
         """WebSocket on_ticks callback. Evaluates real-time price updates against levels."""
-        # Enforce start time restriction: Do not trigger trades before 09:30 AM to filter out morning whipsaws
+        # Enforce market hours: 09:30 AM to 02:45 PM (14:45)
         current_time = datetime.datetime.now().time()
-        if current_time < datetime.time(9, 30):
+        if not (datetime.time(9, 30) <= current_time <= datetime.time(14, 45)):
             return
 
         with self._lock:
@@ -585,6 +646,25 @@ class IntradayLiveMonitor:
                                 strategy="Volatility Contraction",
                                 target=round(target_level, 2)
                             )
+                            # Write to shared notifications for UI display
+                            try:
+                                import json
+                                import os
+                                SHARED_NOTIFICATIONS_FILE = "shared_notifications.json"
+                                data = []
+                                if os.path.exists(SHARED_NOTIFICATIONS_FILE):
+                                    with open(SHARED_NOTIFICATIONS_FILE, "r") as f:
+                                        data = json.load(f)
+                                data.append({
+                                    "ticker": symbol,
+                                    "msg": f"🟢 Bullish Breakout Entry @ {last_price:.2f}",
+                                    "category": "Bullish",
+                                    "time": datetime.datetime.now().strftime("%H:%M")
+                                })
+                                with open(SHARED_NOTIFICATIONS_FILE, "w") as f:
+                                    json.dump(data, f, indent=4)
+                            except Exception as ne:
+                                logging.error(f"Failed to save shared notification: {ne}")
                         except Exception as pe:
                             logging.error(f"Failed to submit dashboard paper trade: {pe}")
                             
@@ -652,6 +732,25 @@ class IntradayLiveMonitor:
                                 strategy="Volatility Contraction",
                                 target=round(target_level, 2)
                             )
+                            # Write to shared notifications for UI display
+                            try:
+                                import json
+                                import os
+                                SHARED_NOTIFICATIONS_FILE = "shared_notifications.json"
+                                data = []
+                                if os.path.exists(SHARED_NOTIFICATIONS_FILE):
+                                    with open(SHARED_NOTIFICATIONS_FILE, "r") as f:
+                                        data = json.load(f)
+                                data.append({
+                                    "ticker": symbol,
+                                    "msg": f"🔴 Bearish Breakdown Entry @ {last_price:.2f}",
+                                    "category": "Bearish",
+                                    "time": datetime.datetime.now().strftime("%H:%M")
+                                })
+                                with open(SHARED_NOTIFICATIONS_FILE, "w") as f:
+                                    json.dump(data, f, indent=4)
+                            except Exception as ne:
+                                logging.error(f"Failed to save shared notification: {ne}")
                         except Exception as pe:
                             logging.error(f"Failed to submit dashboard paper trade: {pe}")
                             
@@ -689,8 +788,11 @@ class IntradayLiveMonitor:
         self.kws.reconnect = True
         
         try:
-            # Block and stream ticks (Ctrl+C to terminate)
-            self.kws.connect(threaded=False)
+            # Use threaded=True to run Twisted in a separate thread without installing signal handlers
+            self.kws.connect(threaded=True)
+            import sys
+            while getattr(sys, "_vcp_monitor_enabled", False):
+                time.sleep(1)
         except KeyboardInterrupt:
             logging.info("🚪 Manual termination requested. Shutting down WebSocket Monitor...")
             self.stop_monitoring()

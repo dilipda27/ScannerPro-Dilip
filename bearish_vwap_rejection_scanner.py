@@ -698,7 +698,7 @@ def main():
     tickers = universe_df['Ticker'].tolist()
 
     # Refresh button
-    if st.sidebar.button("🔄 Invalidate Cache & Refresh", type="primary", use_container_width=True):
+    if st.sidebar.button("🔄 Invalidate Cache & Refresh", type="primary", width="stretch"):
         st.cache_data.clear()
         st.toast("Refreshed data feeds!", icon="⚡")
         st.rerun()
@@ -907,7 +907,7 @@ def main():
                     xaxis2=dict(gridcolor='#1e293b'), yaxis2=dict(gridcolor='#1e293b', font=dict(color='#cbd5e1')),
                     margin=dict(l=10, r=10, t=10, b=10)
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
             # Candle Data Log
             st.subheader("📋 Session Candle Log & Safety Filter Diagnostics")
@@ -940,7 +940,7 @@ def main():
                         styles[idx] = 'background-color: rgba(239, 68, 68, 0.1); color: #f43f5e;'
                 return styles
 
-            st.dataframe(display_log.style.apply(style_rows, axis=1), use_container_width=True)
+            st.dataframe(display_log.style.apply(style_rows, axis=1), width="stretch")
 
 
     # --- TAB 2: REAL-TIME GLOBAL SCANNER ---
@@ -952,7 +952,7 @@ def main():
         cache_count = len(universe_df)
         st.info(f"📁 Pre-Filtered Weak Stock Universe Size: **{cache_count} stocks**")
 
-        if st.button("🚀 Run Lightning Setup Scan", type="primary", use_container_width=True):
+        if st.button("🚀 Run Lightning Setup Scan", type="primary", width="stretch"):
             # 1. Speed Pre-Screen
             active_candidates = batch_pre_screen(universe_df)
 
@@ -997,7 +997,7 @@ def main():
                 if not triggered_df.empty:
                     st.dataframe(
                         triggered_df[['Ticker', 'Price', 'Pattern', 'Zone', 'SL', 'Target_1', 'Target_2', 'Risk_Reward']],
-                        use_container_width=True
+                        width="stretch"
                     )
 
                     # Bulk trades execute panel
@@ -1035,7 +1035,7 @@ def main():
                 if not monitored_df.empty:
                     st.dataframe(
                         monitored_df[['Ticker', 'LTP', 'VWAP', 'EMA_9', 'Prev_Close', 'Yesterday_Low']],
-                        use_container_width=True
+                        width="stretch"
                     )
 
         # --- POSITION TRACKING ---
@@ -1088,14 +1088,14 @@ def main():
                             "SL": "₹{:.2f}",
                             "Live P&L": "₹{:.2f}"
                         }).map(style_pnl, subset=['Live P&L']),
-                        use_container_width=True
+                        width="stretch"
                     )
 
                     # Position Exit selector
                     ex_col1, ex_col2 = st.columns([1, 4])
                     with ex_col1:
                         exit_ticker = st.selectbox("Select Active Position to Close", active_only['Ticker'].tolist())
-                        if st.button("🚪 Close Selected Trade", type="secondary", use_container_width=True):
+                        if st.button("🚪 Close Selected Trade", type="secondary", width="stretch"):
                             price_now = active_only[active_only['Ticker'] == exit_ticker]['Current Price'].values[0]
                             paper_trader.exit_trade(exit_ticker, kite, override_price=price_now)
                             st.success(f"Position closed for {exit_ticker}!")

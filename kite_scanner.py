@@ -43,37 +43,100 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 def get_nifty500_symbols():
     """Fetch Nifty 500 list from NSE."""
+    import os
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     url_500 = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
+    cache_500 = "nifty500_local_cache.csv"
+    nifty500_symbols = []
     try:
         r_500 = requests.get(url_500, headers=headers, timeout=10)
-        df_500 = pd.read_csv(io.StringIO(r_500.text))
+        r_500.raise_for_status()
+        text_500 = r_500.text
+        # Save to cache
+        with open(cache_500, "w", encoding="utf-8") as f:
+            f.write(text_500)
+        df_500 = pd.read_csv(io.StringIO(text_500))
         nifty500_symbols = list(df_500['Symbol'].str.strip())
         return nifty500_symbols
     except Exception as e:
-        logging.error(f"Error fetching Nifty 500: {e}")
-        # Fallback small list for testing
-        return ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK"]
+        logging.error(f"Error fetching Nifty 500 from NSE: {e}. Trying local cache...")
+        if os.path.exists(cache_500):
+            try:
+                df_500 = pd.read_csv(cache_500)
+                nifty500_symbols = list(df_500['Symbol'].str.strip())
+                logging.info("Loaded Nifty 500 from local cache.")
+                return nifty500_symbols
+            except Exception as ce:
+                logging.error(f"Failed to read Nifty 500 cache: {ce}")
+        
+        # Absolute fallback list
+        return [
+            "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "BHARTIARTL", "SBI", "LICI",
+            "ITC", "HINDUNILVR", "LT", "BAJFINANCE", "HCLTECH", "MARUTI", "SUNPHARMA",
+            "ADANIENT", "KOTAKBANK", "AXISBANK", "TITAN", "ULTRACEMCO", "NTPC", "TATAMOTORS",
+            "ONGC", "POWERGRID", "ASIANPAINT", "COALINDIA", "JSWSTEEL", "M&M", "TRENT",
+            "NESTLEIND", "TATACHEM", "HINDALCO", "BPCL", "GRASIM", "WIPRO", "TECHM",
+            "HDFCLIFE", "SBILIFE", "DRREDDY", "IOC", "CIPLA", "EICHERMOT", "DIVISLAB",
+            "INDUSINDBK", "SBICARD", "MUTHOOTFIN", "APOLLOHOSP", "HEROMOTOCO", "SHRIRAMFIN"
+        ]
 
 def get_nifty500_fno_symbols():
     """Fetch Nifty 500 stocks and filter for those in the FNO segment."""
+    import os
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     nifty500_symbols = set(get_nifty500_symbols())
+    cache_fno = "fo_mktlots_local_cache.csv"
     
     url_fno = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
     fno_symbols = set()
     try:
         r_fno = requests.get(url_fno, headers=headers, timeout=10)
-        for line in r_fno.text.split('\n'):
+        r_fno.raise_for_status()
+        text_fno = r_fno.text
+        # Save to cache
+        with open(cache_fno, "w", encoding="utf-8") as f:
+            f.write(text_fno)
+        for line in text_fno.split('\n'):
             parts = line.split(',')
             if len(parts) > 2:
                 sym = parts[1].strip()
                 if sym and sym != "SYMBOL":
                     fno_symbols.add(sym)
     except Exception as e:
-        logging.error(f"Error fetching FNO list: {e}")
-        fno_symbols = nifty500_symbols  # Fallback
-        
+        logging.error(f"Error fetching FNO list from NSE: {e}. Trying local cache...")
+        loaded_fno_cache = False
+        if os.path.exists(cache_fno):
+            try:
+                with open(cache_fno, "r", encoding="utf-8") as f:
+                    for line in f.read().split('\n'):
+                        parts = line.split(',')
+                        if len(parts) > 2:
+                            sym = parts[1].strip()
+                            if sym and sym != "SYMBOL":
+                                fno_symbols.add(sym)
+                if fno_symbols:
+                    logging.info("Loaded FNO list from local cache.")
+                    loaded_fno_cache = True
+            except Exception as ce:
+                logging.error(f"Failed to read FNO cache: {ce}")
+                
+        if not loaded_fno_cache:
+            # Parse FNO list from local kite_instruments_nfo.csv if available
+            kite_inst_file = "kite_instruments_nfo.csv"
+            if os.path.exists(kite_inst_file):
+                try:
+                    df_inst = pd.read_csv(kite_inst_file)
+                    nfo_fno_syms = df_inst[df_inst['segment'] == 'NFO-FUT']['name'].dropna().unique()
+                    for sym in nfo_fno_syms:
+                        fno_symbols.add(sym.strip())
+                    if fno_symbols:
+                        logging.info(f"Loaded {len(fno_symbols)} FNO symbols from {kite_inst_file}")
+                except Exception as ie:
+                    logging.error(f"Failed to load FNO symbols from kite instruments: {ie}")
+                    
+        if not fno_symbols:
+            fno_symbols = nifty500_symbols
+            
     final_symbols = nifty500_symbols.intersection(fno_symbols)
     return sorted(list(final_symbols))
 

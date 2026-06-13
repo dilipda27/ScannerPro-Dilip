@@ -311,7 +311,7 @@ def scan_bullish_breakouts(kite, progress_callback=None):
             
             if vol_spike and above_vwap and not is_chasing and nifty_bullish and is_consolidating:
                 # Active Trading Hours
-                if datetime.time(9, 30) <= to_date.time() <= datetime.time(15, 0) and is_breakout:
+                if datetime.time(9, 30) <= to_date.time() <= datetime.time(14, 45) and is_breakout:
                     # Retest limit entry: enter at breakout_level if touch occurred, else close
                     entry_price = breakout_level if confirmed_candle['low'] <= breakout_level else ltp
                     qty = int(250000 / entry_price)
@@ -350,7 +350,7 @@ def scan_bullish_breakouts(kite, progress_callback=None):
                         "VWAP": round(vwap, 2),
                         "Stop Loss": "-",
                         "Target": "-",
-                        "Status": "Closed for Day" if to_date.time() > datetime.time(15, 0) else "Monitoring",
+                        "Status": "Closed for Day" if to_date.time() > datetime.time(14, 45) else "Monitoring",
                         "Token": token
                     })
         except Exception as e:
