@@ -5,6 +5,7 @@ import kite_scanner
 import high52_scanner
 import bullish_breakout_scanner
 import long_trade_scanner
+import minervini_vcp_scanner
 import os
 import pandas as pd
 from kiteconnect import KiteConnect
@@ -33,7 +34,7 @@ def consume_shared_notifications():
     import json
     import os
     import time
-    SHARED_NOTIFICATIONS_FILE = "shared_notifications.json"
+    SHARED_NOTIFICATIONS_FILE = os.path.join("data", "state", "shared_notifications.json")
     if not os.path.exists(SHARED_NOTIFICATIONS_FILE):
         return
     for _ in range(5):
@@ -327,7 +328,7 @@ with tab_option_desk:
             btn_desk1, btn_desk2 = st.columns(2)
             with btn_desk1:
                 if not is_running_od:
-                    if st.button("⚡ Start Option Desk Strategy", type="primary", use_container_width=True, key="btn_start_od"):
+                    if st.button("⚡ Start Option Desk Strategy", type="primary", width='stretch', key="btn_start_od"):
                         try:
                             datetime.datetime.strptime(desk_start, "%H:%M")
                             datetime.datetime.strptime(desk_end, "%H:%M")
@@ -342,11 +343,11 @@ with tab_option_desk:
                         except ValueError:
                             st.error("Invalid time format. Please use HH:MM (e.g., 09:20).")
                 else:
-                    st.button("⚡ Start Option Desk Strategy", type="primary", use_container_width=True, disabled=True, key="btn_start_od_disabled")
+                    st.button("⚡ Start Option Desk Strategy", type="primary", width='stretch', disabled=True, key="btn_start_od_disabled")
                     
             with btn_desk2:
                 if is_running_od:
-                    if st.button("🛑 Stop & Square-off Strategy", type="primary", use_container_width=True, key="btn_stop_od"):
+                    if st.button("🛑 Stop & Square-off Strategy", type="primary", width='stretch', key="btn_stop_od"):
                         success, msg = option_desk_manager.stop_strategy(kite)
                         if success:
                             st.success(msg)
@@ -354,7 +355,7 @@ with tab_option_desk:
                         else:
                             st.error(msg)
                 else:
-                    st.button("🛑 Stop & Square-off Strategy", type="primary", use_container_width=True, disabled=True, key="btn_stop_od_disabled")
+                    st.button("🛑 Stop & Square-off Strategy", type="primary", width='stretch', disabled=True, key="btn_stop_od_disabled")
                     
             # Live Status Panel
             st.markdown("#### 📊 Strategy Live Monitor")
@@ -428,7 +429,7 @@ with tab_option_desk:
             btn_col1, btn_col2 = st.columns(2)
             with btn_col1:
                 if not is_running:
-                    if st.button("⚡ Start Straddle Strategy", type="primary", use_container_width=True, key="btn_start_rs"):
+                    if st.button("⚡ Start Straddle Strategy", type="primary", width='stretch', key="btn_start_rs"):
                         try:
                             datetime.datetime.strptime(start_sel, "%H:%M")
                             datetime.datetime.strptime(end_sel, "%H:%M")
@@ -443,11 +444,11 @@ with tab_option_desk:
                         except ValueError:
                             st.error("Invalid time format. Please use HH:MM (e.g., 09:20).")
                 else:
-                    st.button("⚡ Start Straddle Strategy", type="primary", use_container_width=True, disabled=True, key="btn_start_rs_disabled")
+                    st.button("⚡ Start Straddle Strategy", type="primary", width='stretch', disabled=True, key="btn_start_rs_disabled")
                     
             with btn_col2:
                 if is_running:
-                    if st.button("🛑 Stop & Square-off Strategy", type="primary", use_container_width=True, key="btn_stop_rs"):
+                    if st.button("🛑 Stop & Square-off Strategy", type="primary", width='stretch', key="btn_stop_rs"):
                         success, msg = rolling_straddle_manager.stop_strategy(kite)
                         if success:
                             st.success(msg)
@@ -455,7 +456,7 @@ with tab_option_desk:
                         else:
                             st.error(msg)
                 else:
-                    st.button("🛑 Stop & Square-off Strategy", type="primary", use_container_width=True, disabled=True, key="btn_stop_rs_disabled")
+                    st.button("🛑 Stop & Square-off Strategy", type="primary", width='stretch', disabled=True, key="btn_stop_rs_disabled")
                     
             # Live Status Panel
             st.markdown("#### 📊 Strategy Live Monitor")
@@ -653,7 +654,7 @@ with tab_option_desk:
             
             with perf_tab_intraday:
                 st.markdown("#### ⚡ Today's Intraday Options MTM Trajectory")
-                INTRADAY_PNL_LOG_FILE = "options_intraday_pnl_log.csv"
+                INTRADAY_PNL_LOG_FILE = os.path.join("data", "trades", "options_intraday_pnl_log.csv")
                 if os.path.exists(INTRADAY_PNL_LOG_FILE):
                     try:
                         intraday_df = pd.read_csv(INTRADAY_PNL_LOG_FILE)
@@ -728,7 +729,7 @@ with tab_option_desk:
                                     height=400,
                                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                                 )
-                                st.plotly_chart(fig_intra, use_container_width=True, config={'displayModeBar': False})
+                                st.plotly_chart(fig_intra, width='stretch', config={'displayModeBar': False})
                             else:
                                 st.info("No data available for the selected strategy filter today.")
                         else:
@@ -913,7 +914,7 @@ with tab_option_desk:
                                 height=450,
                                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                             )
-                            st.plotly_chart(fig_hist, use_container_width=True, config={'displayModeBar': False})
+                            st.plotly_chart(fig_hist, width='stretch', config={'displayModeBar': False})
                             
                             daily_pnl_df = filtered_df.groupby('ExitDateStr')['NetPnL'].sum().reset_index()
                             daily_pnl_df.columns = ['Date', 'PnL']
@@ -937,7 +938,7 @@ with tab_option_desk:
                                 margin=dict(l=40, r=40, t=55, b=40),
                                 height=300
                             )
-                            st.plotly_chart(fig_daily, use_container_width=True, config={'displayModeBar': False})
+                            st.plotly_chart(fig_daily, width='stretch', config={'displayModeBar': False})
                             
                         else:
                             st.warning("No data found matching the selected filters.")
@@ -1014,11 +1015,11 @@ with tab_option_desk:
             st.markdown("### 📜 Signal Log")
             import os
             import pandas as pd
-            if os.path.exists("options_signals.csv"):
+            if os.path.exists(os.path.join("data", "trades", "options_signals.csv")):
                 import csv
                 rows = []
                 try:
-                    with open("options_signals.csv", "r", encoding="utf-8") as f:
+                    with open(os.path.join("data", "trades", "options_signals.csv"), "r", encoding="utf-8") as f:
                         reader = csv.reader(f)
                         header = next(reader, None)
                         if header:
@@ -1030,14 +1031,17 @@ with tab_option_desk:
                                 rows.append(row[:7])
                     if rows:
                         log_df = pd.DataFrame(rows, columns=["Timestamp", "Index", "Signal", "Score", "PCR", "Spot", "Recommendation"])
-                        st.dataframe(log_df.tail(20).sort_values("Timestamp", ascending=False), use_container_width=True)
+                        st.dataframe(log_df.tail(20).sort_values("Timestamp", ascending=False), width='stretch')
                     else:
                         st.info("No signal logs found.")
                 except Exception as parse_err:
                     st.error(f"Error reading options_signals.csv: {parse_err}")
                 
                 if st.button("🗑️ Clear Log", key="clear_opt_log_desk"):
-                    os.remove("options_signals.csv")
+                    try:
+                        os.remove(os.path.join("data", "trades", "options_signals.csv"))
+                    except:
+                        pass
                     st.rerun()
             else:
                 st.info("No signals generated yet. Ensure the bot is running during market hours.")
@@ -1281,7 +1285,7 @@ with tab_option_desk:
                             for _, row in active_equity.iterrows():
                                 if paper_trader.exit_trade(row['Ticker'], _kite_exit):
                                     count += 1
-                            paper_trader.export_history_to_excel("paper_trade_history.xlsx")
+                            paper_trader.export_history_to_excel()
                             st.cache_data.clear() # Force portfolio refresh
                             if count > 0:
                                 st.success(f"Closed all {count} active equity trades and archived to Excel.")
@@ -1387,7 +1391,7 @@ with tab_option_desk:
                     if st.button("🗑️ Archive & Clear History", width="stretch"):
                         paper_trader.archive_history()
                         # Regenerate Excel file to include archived records
-                        paper_trader.export_history_to_excel("paper_trade_history.xlsx")
+                        paper_trader.export_history_to_excel()
                         st.success("History archived to permanent records and cleared!")
                         st.rerun()
             else:
@@ -1769,6 +1773,7 @@ KITE_STRATEGIES = [
     "EOD Long Swing Setup (Kite)",
     "Multi-Year Breakout (Kite)",
     "Volatility Contraction Scanner (Kite)",
+    "Minervini VCP Breakout (Kite)",
     "Bearish VWAP Rejection (Kite)",
     "Bullish VWAP Rejection (Kite)"
 ]
@@ -1790,6 +1795,7 @@ SWING_STRATEGIES = [
     "EOD Long Swing Setup (Kite)",
     "Multi-Year Breakout (Kite)",
     "Volatility Contraction Scanner (Kite)",
+    "Minervini VCP Breakout (Kite)",
     "Swing Trade Candidates",
     "Volume Breakout Stocks"
 ]
@@ -1820,11 +1826,11 @@ def get_cache_count(file_path):
 # Display Cache Status
 st.sidebar.markdown("### 📊 Cache Status")
 cache_files = {
-    "15-Min ORB Breakout (Kite)": "orb_trending_cache.csv",
-    "52-Week High Breakout (Kite)": "high52_cache.csv",
-    "15-Min Bearish Breakdown (Kite)": "bearish_breakdown_cache.csv",
-    "15-Min Bullish Breakout (Kite)": "fno_strength_cache.csv",
-    "Failed Breakout Short (Kite)": "fno_strength_cache.csv"
+    "15-Min ORB Breakout (Kite)": os.path.join("data", "cache", "orb_trending_cache.csv"),
+    "52-Week High Breakout (Kite)": os.path.join("data", "cache", "high52_cache.csv"),
+    "15-Min Bearish Breakdown (Kite)": os.path.join("data", "cache", "bearish_breakdown_cache.csv"),
+    "15-Min Bullish Breakout (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv"),
+    "Failed Breakout Short (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv")
 }
 
 for s in selected_strategies:
@@ -2233,6 +2239,23 @@ with tab_scanners:
                     except Exception as e:
                         st.error(f"Failed to run Multi-Year Breakout Scanner: {e}")
                         results_df = pd.DataFrame()
+                elif strategy == "Minervini VCP Breakout (Kite)":
+                    try:
+                        kite = KiteConnect(api_key=api_key)
+                        kite.set_access_token(st.session_state.kite_access_token)
+                        
+                        def update_progress(processed, total, symbol):
+                            progress = min(processed / total, 1.0) if total > 0 else 0
+                            progress_bar.progress(progress)
+                            status_text.text(f"Processing: {symbol} ({processed}/{total})")
+    
+                        import minervini_vcp_scanner
+                        results_df = minervini_vcp_scanner.scan_minervini_vcp(kite, progress_callback=update_progress)
+                        if results_df.empty:
+                            st.info("No stocks matched the Minervini VCP breakout criteria.")
+                    except Exception as e:
+                        st.error(f"Failed to run Minervini VCP Breakout Scanner: {e}")
+                        results_df = pd.DataFrame()
                 elif strategy == "Bearish VWAP Rejection (Kite)":
                     try:
                         import bearish_vwap_rejection_scanner
@@ -2309,9 +2332,9 @@ with tab_scanners:
     import ai_advisor
     import volatility_contraction_scanner
     has_opt_desk = False
-    if os.path.exists("paper_portfolio.csv"):
+    if os.path.exists(os.path.join("data", "trades", "paper_portfolio.csv")):
         try:
-            pdf_temp = pd.read_csv("paper_portfolio.csv")
+            pdf_temp = pd.read_csv(os.path.join("data", "trades", "paper_portfolio.csv"))
             has_opt_desk = ((pdf_temp['Strategy'] == 'Option Desk') & (pdf_temp['Status'] == 'Active')).any()
         except:
             pass
@@ -3120,10 +3143,10 @@ with tab_scanners:
     st.caption("These lists show all candidates cached/scanned for the day. Caches naturally reset on the next market day morning.")
     
     cache_details = {
-        "15-Min ORB Breakout (Kite)": "orb_trending_cache.csv",
-        "52-Week High Breakout (Kite)": "high52_cache.csv",
-        "15-Min Bearish Breakdown (Kite)": "bearish_breakdown_cache.csv",
-        "15-Min Bullish Breakout / Failed Breakout (Kite)": "fno_strength_cache.csv"
+        "15-Min ORB Breakout (Kite)": os.path.join("data", "cache", "orb_trending_cache.csv"),
+        "52-Week High Breakout (Kite)": os.path.join("data", "cache", "high52_cache.csv"),
+        "15-Min Bearish Breakdown (Kite)": os.path.join("data", "cache", "bearish_breakdown_cache.csv"),
+        "15-Min Bullish Breakout / Failed Breakout (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv")
     }
     
     for label, filename in cache_details.items():
@@ -3144,6 +3167,7 @@ with tab_scanners:
     
     # --- GLOBAL AUTO-REFRESH TIMER FOR ACTIVE MONITORS ---
     if any_active and st.session_state.get('kite_access_token'):
-        import time
-        time.sleep(60) # Auto-refresh every 60 seconds
-        st.rerun()
+        @st.fragment(run_every=60)
+        def trigger_auto_refresh():
+            st.rerun()
+        trigger_auto_refresh()

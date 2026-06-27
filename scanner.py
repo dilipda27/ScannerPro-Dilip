@@ -10,8 +10,8 @@ def get_nifty500_fno_tickers():
     """
     import os
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    cache_500 = "nifty500_local_cache.csv"
-    cache_fno = "fo_mktlots_local_cache.csv"
+    cache_500 = os.path.join("data", "cache", "nifty500_local_cache.csv")
+    cache_fno = os.path.join("data", "cache", "fo_mktlots_local_cache.csv")
     
     # 1. Fetch Nifty 500
     url_500 = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
@@ -83,7 +83,7 @@ def get_nifty500_fno_tickers():
                 
         if not loaded_fno_cache:
             # Parse FNO list from local kite_instruments_nfo.csv if available
-            kite_inst_file = "kite_instruments_nfo.csv"
+            kite_inst_file = os.path.join("data", "cache", "kite_instruments_nfo.csv")
             if os.path.exists(kite_inst_file):
                 try:
                     df_inst = pd.read_csv(kite_inst_file)

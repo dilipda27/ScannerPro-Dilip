@@ -36,7 +36,7 @@ def enforce_kite_rate_limit():
             time.sleep(KITE_REQ_GAP - elapsed)
         _last_kite_request_time = time.time()
 
-ORB_CACHE_FILE = "orb_trending_cache.csv"
+ORB_CACHE_FILE = os.path.join("data", "cache", "orb_trending_cache.csv")
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -46,7 +46,7 @@ def get_nifty500_symbols():
     import os
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     url_500 = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
-    cache_500 = "nifty500_local_cache.csv"
+    cache_500 = os.path.join("data", "cache", "nifty500_local_cache.csv")
     nifty500_symbols = []
     try:
         r_500 = requests.get(url_500, headers=headers, timeout=10)
@@ -85,7 +85,7 @@ def get_nifty500_fno_symbols():
     import os
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     nifty500_symbols = set(get_nifty500_symbols())
-    cache_fno = "fo_mktlots_local_cache.csv"
+    cache_fno = os.path.join("data", "cache", "fo_mktlots_local_cache.csv")
     
     url_fno = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
     fno_symbols = set()
@@ -122,7 +122,7 @@ def get_nifty500_fno_symbols():
                 
         if not loaded_fno_cache:
             # Parse FNO list from local kite_instruments_nfo.csv if available
-            kite_inst_file = "kite_instruments_nfo.csv"
+            kite_inst_file = os.path.join("data", "cache", "kite_instruments_nfo.csv")
             if os.path.exists(kite_inst_file):
                 try:
                     df_inst = pd.read_csv(kite_inst_file)
@@ -159,7 +159,7 @@ def get_kite_instruments(kite, symbols):
         logging.error(f"Error fetching instruments from Kite: {e}")
         return {}
 
-CACHE_DIR = "kite_historical_cache"
+CACHE_DIR = os.path.join("data", "cache", "kite_historical_cache")
 
 def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retries=5):
     """
@@ -631,9 +631,9 @@ def scan_orb_setups(kite, progress_callback=None):
 
     # Load Sector Map
     sector_map = {}
-    if os.path.exists("sector_map.json"):
+    if os.path.exists(os.path.join("data", "cache", "sector_map.json")):
         try:
-            with open("sector_map.json", "r") as f:
+            with open(os.path.join("data", "cache", "sector_map.json"), "r") as f:
                 sector_map = json.load(f)
         except: pass
     
@@ -728,9 +728,8 @@ def scan_orb_setups(kite, progress_callback=None):
         first_candle = df_today.iloc[0]
         if prev_close > 0:
             gap_pct = ((first_candle['open'] - prev_close) / prev_close) * 100
-            # User Filter: Gap between 0.5% and 2.5%
-            # (Avoid > 5% as well)
-            if not (0.5 <= abs(gap_pct) <= 2.5):
+            # User Filter: Gap <= 3.0% (Allow flat opens and moderate gaps)
+            if abs(gap_pct) > 3.0:
                 continue
         else:
             gap_pct = 0
@@ -767,8 +766,9 @@ def scan_orb_setups(kite, progress_callback=None):
             # subsequent_candles[i] is df_today[i+3]. 
             # So candles_before is df_today[0:i+3] (indices 0 to i+2)
             candles_before = df_today.iloc[:i+3]
-            day_high_so_far = candles_before['high'].max()
-            day_low_so_far = candles_before['low'].min()
+            # Check if any prior candle closed outside the ORB range to prevent double breakouts
+            max_close_so_far = candles_before['close'].max()
+            min_close_so_far = candles_before['close'].min()
             
             # Common Filters: Volume Spike (> 1.5x) and Candle Strength (Body >= 50%)
             vol_ok = row['volume'] > (row['Vol_Avg_5'] * 1.5)
@@ -776,18 +776,17 @@ def scan_orb_setups(kite, progress_callback=None):
             body_size = abs(row['close'] - row['open'])
             strength_ok = (body_size >= 0.5 * candle_range) if candle_range > 0 else False
             
-            # --- GAP & COLOR FILTERS (New Discipline) ---
-            first_candle = df_today.iloc[0]
-            is_gap_up = first_candle['open'] >= prev_close
-            is_green_open = first_candle['close'] >= first_candle['open']
-            is_gap_down = first_candle['open'] <= prev_close
-            is_red_open = first_candle['close'] <= first_candle['open']
+            # --- GAP & DIRECTION FILTERS (Relaxed discipline) ---
+            # For longs, allow flat or positive gaps (gap_pct >= -0.5)
+            # For shorts, allow flat or negative gaps (gap_pct <= 0.5)
+            is_valid_long_gap = gap_pct >= -0.5
+            is_valid_short_gap = gap_pct <= 0.5
             
-            # Consolidation Check: check if preceding 3 candles had a tight range (<= 0.5%)
+            # Consolidation Check: check if preceding 3 candles had a tight range (<= 1.2%)
             preceding_candles = df_today.iloc[i:i+3]
             preceding_low = preceding_candles['low'].min()
             tight_range = (preceding_candles['high'].max() - preceding_low) / preceding_low * 100 if preceding_low > 0 else 99
-            is_consolidating = tight_range <= 0.50
+            is_consolidating = tight_range <= 1.20
 
             # Index Alignment Check
             nifty_trend = sector_status.get("NIFTY 50", "Neutral")
@@ -797,25 +796,25 @@ def scan_orb_setups(kite, progress_callback=None):
 
             # BULLISH BREAKOUT
             if row['close'] > orb_high:
-                # Filter: ORB High must be the current Day High (no prior breaches)
-                if day_high_so_far <= orb_high:
+                # Filter: No prior candle has closed above ORB High
+                if max_close_so_far <= orb_high:
                     # 1. ORB High > Prev Day High
                     # 2. Daily Price > Daily 20 EMA
                     # 3. Daily RSI > 55
                     # 4. LTP > VWAP
-                    # 5. NO-CHASE FILTER: Price must be within 0.1% to 0.8% of ORB High
-                    # 6. DISCIPLINE: No Gap-Downs or Red Opening candles for Longs
+                    # 5. NO-CHASE FILTER: Price must be within 0.05% to 1.5% of ORB High
+                    # 6. DISCIPLINE: No significant gap-downs for longs
                     dist_pct = (row['close'] - orb_high) / orb_high * 100
                     if orb_high > prev_day_high and row['close'] > daily_ema_20 and daily_rsi > 55 and row['close'] > current_vwap:
-                        if is_gap_up and is_green_open and 0.1 <= dist_pct <= 0.8:
-                            # 7. Index Check and Consolidation Check
-                            if nifty_trend == "Bullish" and is_consolidating:
+                        if is_valid_long_gap and 0.05 <= dist_pct <= 1.5:
+                            # 7. Index Check (allow Bullish or Neutral broad market) and Consolidation Check
+                            if nifty_trend in ["Bullish", "Neutral"] and is_consolidating:
                                 sl_price = prev_row['low']
                                 
-                                # Check Sector Sync
+                                # Check Sector Sync (only avoid explicitly Bearish sector trends)
                                 target_sector = sector_map.get(symbol, "NIFTY 50")
                                 sec_trend = sector_status.get(target_sector, "Neutral")
-                                is_in_sync = (sec_trend == "Bullish")
+                                is_in_sync = sec_trend in ["Bullish", "Neutral"]
                                 
                                 if is_in_sync:
                                     breakout_type = "Bullish (Strong Trend)"
@@ -828,25 +827,25 @@ def scan_orb_setups(kite, progress_callback=None):
             
             # BEARISH BREAKOUT
             elif row['close'] < orb_low:
-                # Filter: ORB Low must be the current Day Low (no prior breaches)
-                if day_low_so_far >= orb_low:
+                # Filter: No prior candle has closed below ORB Low
+                if min_close_so_far >= orb_low:
                     # 1. ORB Low < Prev Close (User Benchmark Change)
                     # 2. Daily Price < Daily 20 EMA (User Trend Change)
                     # 3. Daily RSI < 50 (User RSI Change)
                     # 4. LTP < VWAP
-                    # 5. NO-CHASE FILTER: Price must be within 0.1% to 0.8% of ORB Low
-                    # 6. DISCIPLINE: No Gap-Ups or Green Opening candles for Shorts
+                    # 5. NO-CHASE FILTER: Price must be within 0.05% to 1.5% of ORB Low
+                    # 6. DISCIPLINE: No significant gap-ups for shorts
                     dist_pct = (orb_low - row['close']) / orb_low * 100
                     if orb_low < prev_close and row['close'] < daily_ema_20 and daily_rsi < 50 and row['close'] < current_vwap:
-                        if is_gap_down and is_red_open and 0.1 <= dist_pct <= 0.8:
-                            # 7. Index Check and Consolidation Check
-                            if nifty_trend == "Bearish" and is_consolidating:
+                        if is_valid_short_gap and 0.05 <= dist_pct <= 1.5:
+                            # 7. Index Check (allow Bearish or Neutral broad market) and Consolidation Check
+                            if nifty_trend in ["Bearish", "Neutral"] and is_consolidating:
                                 sl_price = prev_row['high']
                                 
-                                # Check Sector Sync
+                                # Check Sector Sync (only avoid explicitly Bullish sector trends)
                                 target_sector = sector_map.get(symbol, "NIFTY 50")
                                 sec_trend = sector_status.get(target_sector, "Neutral")
-                                is_in_sync = (sec_trend == "Bearish")
+                                is_in_sync = sec_trend in ["Bearish", "Neutral"]
                                 
                                 if is_in_sync:
                                     breakout_type = "Bearish (Strong Trend)"
@@ -1009,9 +1008,9 @@ def run_unified_morning_cache(kite, progress_callback=None):
 
     # Save both caches
     if h52_data:
-        pd.DataFrame(h52_data).to_csv("high52_cache.csv", index=False)
+        pd.DataFrame(h52_data).to_csv(os.path.join("data", "cache", "high52_cache.csv"), index=False)
     if orb_data:
-        pd.DataFrame(orb_data).to_csv("orb_trending_cache.csv", index=False)
+        pd.DataFrame(orb_data).to_csv(os.path.join("data", "cache", "orb_trending_cache.csv"), index=False)
         
     logging.info(f"✅ Unified caching complete. H52: {len(h52_data)}, ORB: {len(orb_data)}")
     return True

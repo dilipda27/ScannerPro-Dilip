@@ -31,10 +31,10 @@ db_queue = queue.Queue()
 bot_threads = []
 stop_event = threading.Event()
 ticker_instance = None
-DB_FILE = "options_ticks.db"
-SIGNAL_LOG_FILE = "options_signals.csv"
+DB_FILE = os.path.join("data", "database", "options_ticks.db")
+SIGNAL_LOG_FILE = os.path.join("data", "trades", "options_signals.csv")
 sent_signals = {} # Cache to prevent spamming Telegram
-INSTRUMENT_CACHE_PREFIX = "kite_instruments_"
+INSTRUMENT_CACHE_PREFIX = os.path.join("data", "cache", "kite_instruments_")
 
 def get_cached_instruments(kite, exchange):
     """

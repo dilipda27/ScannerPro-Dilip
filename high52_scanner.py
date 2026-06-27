@@ -10,7 +10,7 @@ import kite_scanner
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-CACHE_FILE = "high52_cache.csv"
+CACHE_FILE = os.path.join("data", "cache", "high52_cache.csv")
 
 def cache_daily_data(kite, progress_callback=None):
     """
@@ -147,9 +147,9 @@ def scan_52w_breakouts(kite, progress_callback=None, only_closed_candles=True):
     # Load Sector Map
     import json
     sector_map = {}
-    if os.path.exists("sector_map.json"):
+    if os.path.exists(os.path.join("data", "cache", "sector_map.json")):
         try:
-            with open("sector_map.json", "r") as f:
+            with open(os.path.join("data", "cache", "sector_map.json"), "r") as f:
                 sector_map = json.load(f)
         except: pass
 
@@ -184,6 +184,8 @@ def scan_52w_breakouts(kite, progress_callback=None, only_closed_candles=True):
     
     to_date = now
     from_date = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    if from_date > to_date:
+        from_date = from_date - datetime.timedelta(days=1)
     
     total_symbols = len(cache_df)
     processed = 0

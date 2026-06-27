@@ -7,57 +7,42 @@ import datetime
 import threading
 import config
 import paper_trader
-import telegram_agent
 from options_bot import get_option_chain
+from base_strategy import BaseStrategy
 
-STATE_FILE = "option_desk_state.json"
-_monitor_thread = None
-_stop_event = threading.Event()
-_state_lock = threading.Lock()
+STATE_FILE = os.path.join("data", "state", "option_desk_state.json")
+_cached_vix = 15.0
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+default_state = {
+    "is_running": False,
+    "index_name": "NIFTY",
+    "risk_capital": 250000.0,
+    "lots": 3,
+    "target_delta": 0.2,
+    "stoploss_delta": 0.5,
+    "entry_time": "09:20",
+    "exit_time": "15:15",
+    "stoploss_action": "Roll",
+    "realized_pnl": 0.0,
+    "status_message": "Not running",
+    "last_update": "",
+    "qty": 0,
+    "ce_ticker": None,
+    "pe_ticker": None,
+    "ce_entry_price": 0.0,
+    "pe_entry_price": 0.0
+}
+
+strategy = BaseStrategy("OptionDesk", STATE_FILE, default_state)
+
 def load_state():
-    with _state_lock:
-        if not os.path.exists(STATE_FILE):
-            default_state = {
-                "is_running": False,
-                "index_name": "NIFTY",
-                "risk_capital": 250000.0,
-                "lots": 3,
-                "target_delta": 0.2,
-                "stoploss_delta": 0.5,
-                "entry_time": "09:20",
-                "exit_time": "15:15",
-                "stoploss_action": "Roll",
-                "realized_pnl": 0.0,
-                "status_message": "Not running",
-                "last_update": "",
-                "qty": 0,
-                "ce_ticker": None,
-                "pe_ticker": None,
-                "ce_entry_price": 0.0,
-                "pe_entry_price": 0.0
-            }
-            with open(STATE_FILE, "w") as f:
-                json.dump(default_state, f, indent=4)
-            return default_state
-        try:
-            with open(STATE_FILE, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            logging.error(f"Error loading option desk state: {e}")
-            return {}
+    return strategy.load_state()
 
 def save_state(state):
-    with _state_lock:
-        try:
-            state["last_update"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with open(STATE_FILE, "w") as f:
-                json.dump(state, f, indent=4)
-        except Exception as e:
-            logging.error(f"Error saving option desk state: {e}")
+    strategy.save_state(state)
 
 def norm_cdf(x):
     """Cumulative distribution function for the standard normal distribution."""
@@ -95,7 +80,7 @@ def get_days_to_expiry(expiry_dt):
         return max(0, (expiry_date - today).days)
     except Exception as e:
         logging.error(f"Error parsing expiry date: {e}")
-        return 0
+        return 4
 
 def find_strike_by_delta(kite, active_chain, spot, days_to_expiry, vix, option_type, target_delta=0.2):
     """Finds the option strike closest to the target delta."""
@@ -138,30 +123,10 @@ def find_strike_by_delta(kite, active_chain, spot, days_to_expiry, vix, option_t
     }
 
 def add_notification_to_shared(ticker, msg, category="Options"):
-    """Appends a notification to the shared file."""
-    SHARED_NOTIFICATIONS_FILE = "shared_notifications.json"
-    try:
-        data = []
-        if os.path.exists(SHARED_NOTIFICATIONS_FILE):
-            with open(SHARED_NOTIFICATIONS_FILE, "r") as f:
-                data = json.load(f)
-        data.append({
-            "ticker": ticker,
-            "msg": msg,
-            "category": category,
-            "time": datetime.datetime.now().strftime("%H:%M")
-        })
-        with open(SHARED_NOTIFICATIONS_FILE, "w") as f:
-            json.dump(data, f, indent=4)
-    except Exception as e:
-        logging.error(f"Failed to append shared notification: {e}")
+    strategy.add_notification_to_shared(ticker, msg, category)
 
 def _send_alert(msg):
-    bot_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
-    chat_id = getattr(config, 'TELEGRAM_PERSONAL_CHAT_ID', '') or getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', getattr(config, 'TELEGRAM_CHAT_ID', ''))
-    if bot_token and chat_id:
-        telegram_agent.send_message(msg, bot_token, chat_id, parse_mode="Markdown")
-    add_notification_to_shared("OptionDesk", msg.replace("*", "").replace("`", ""))
+    strategy.send_alert(msg)
 
 def start_strategy(kite, index_name, capital, target_delta, stoploss_delta, entry_time_str, exit_time_str, stoploss_action, lots):
     state = load_state()
@@ -185,41 +150,27 @@ def start_strategy(kite, index_name, capital, target_delta, stoploss_delta, entr
     state["status_message"] = "Initializing..."
     save_state(state)
     
-    global _monitor_thread, _stop_event
-    _stop_event.clear()
-    _monitor_thread = threading.Thread(target=_monitor_loop, args=(kite,), name="option_desk_monitor_thread", daemon=True)
-    _monitor_thread.start()
-    
-    return True, f"Option Desk strategy initialized for {index_name}. Running in background."
+    success, msg = strategy.start_thread(kite, _monitor_loop, "option_desk_monitor_thread")
+    if success:
+        return True, f"Option Desk strategy initialized for {index_name}. Running in background."
+    else:
+        return False, msg
 
 def stop_strategy(kite):
     state = load_state()
     if not state.get("is_running"):
         return False, "Strategy is not running."
         
-    global _stop_event
-    _stop_event.set()
-    
+    strategy.stop_thread()
     _exit_active_positions(kite, state, "Manual stop request")
     return True, "Option Desk Strategy stopped. All active positions squared off."
 
 def init_option_desk_on_startup(kite):
-    state = load_state()
-    if state.get("is_running"):
-        global _monitor_thread, _stop_event
-        # Check if thread is already active
-        for t in threading.enumerate():
-            if t.name == "option_desk_monitor_thread" and t.is_alive():
-                return
-                
-        logging.info("Auto-restarting Option Desk background monitor thread on startup...")
-        _stop_event.clear()
-        _monitor_thread = threading.Thread(target=_monitor_loop, args=(kite,), name="option_desk_monitor_thread", daemon=True)
-        _monitor_thread.start()
+    strategy.init_on_startup(kite, _monitor_loop, "option_desk_monitor_thread")
 
 def _monitor_loop(kite):
     logging.info("Starting Option Desk background monitor thread...")
-    while not _stop_event.is_set():
+    while not strategy.is_stopped():
         state = load_state()
         if not state.get("is_running"):
             break
@@ -235,7 +186,7 @@ def _monitor_loop(kite):
             if now < start_time:
                 state["status_message"] = f"Waiting for entry time {state['entry_time']}..."
                 save_state(state)
-                _stop_event.wait(10)
+                strategy.wait(10)
                 continue
                 
             if now >= end_time:
@@ -253,7 +204,7 @@ def _monitor_loop(kite):
         except Exception as e:
             logging.error(f"Error in Option Desk monitor loop: {e}", exc_info=True)
             
-        _stop_event.wait(10)
+        strategy.wait(10)
         
     logging.info("Option Desk background monitor thread stopped.")
 
@@ -280,10 +231,12 @@ def _check_and_execute_strategy(kite, state, now):
         return
         
     # 3. Get VIX
+    global _cached_vix
     try:
         vix = kite.quote(["NSE:INDIA VIX"])["NSE:INDIA VIX"]['last_price']
+        _cached_vix = vix
     except Exception:
-        vix = 15.0
+        vix = _cached_vix
         
     expiry_date = active_chain.iloc[0]['expiry']
     days_to_expiry = get_days_to_expiry(expiry_date)

@@ -2,7 +2,7 @@ import json
 import os
 import datetime
 
-CACHE_FILE = "notified_cache.json"
+CACHE_FILE = os.path.join("data", "state", "notified_cache.json")
 
 def get_notified_tickers(scan_name):
     """Load notified tickers for today and specific scan."""

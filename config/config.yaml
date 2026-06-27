@@ -1,0 +1,13 @@
+kite:
+  api_key: "cl7wqm54xlvsva52"
+  api_secret: "x4gfq71ek6twzdrr3fki3hpf71tvfahz"
+gemini:
+  api_key: "AIzaSyBzvVacmWSr-YNmOYh1hZxmG1tBZzfBGLU"
+telegram:
+  bot_token: "8741631027:AAGHs2efvOeQg9mTVBE2Oe8HNKbj0H7P1oQ"
+  chat_id: "@SwingTradeIdeaNse500"
+  chat_id_intraday: "@IntradayTrades_FinFundaIndia"
+  personal_chat_id: "1082905661"
+options:
+  lot_size_nifty: 65
+  lot_size_sensex: 20

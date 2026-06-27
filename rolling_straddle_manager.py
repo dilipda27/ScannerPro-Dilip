@@ -9,56 +9,41 @@ from options_bot import get_option_chain
 import paper_trader
 import config
 import telegram_agent
+from base_strategy import BaseStrategy
 
-STATE_FILE = "rolling_straddle_state.json"
-_monitor_thread = None
-_stop_event = threading.Event()
-_state_lock = threading.Lock()
+STATE_FILE = os.path.join("data", "state", "rolling_straddle_state.json")
 
 # Setup logging configuration if not already configured
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+default_state = {
+    "is_running": False,
+    "index_name": "NIFTY",
+    "lots": 1,
+    "start_time": "09:20",
+    "end_time": "15:20",
+    "rolling_threshold_pct": 0.5,
+    "max_sl": 5000.0,
+    "max_rolls": 5,
+    "current_rolls": 0,
+    "initial_spot": 0.0,
+    "ce_ticker": None,
+    "pe_ticker": None,
+    "ce_entry_price": 0.0,
+    "pe_entry_price": 0.0,
+    "qty": 0,
+    "realized_pnl": 0.0,
+    "status_message": "Not running",
+    "last_update": ""
+}
+
+strategy = BaseStrategy("Straddle", STATE_FILE, default_state)
+
 def load_state():
-    with _state_lock:
-        if not os.path.exists(STATE_FILE):
-            default_state = {
-                "is_running": False,
-                "index_name": "NIFTY",
-                "lots": 1,
-                "start_time": "09:20",
-                "end_time": "15:15",
-                "rolling_threshold_pct": 0.5,
-                "max_sl": 5000.0,
-                "max_rolls": 5,
-                "current_rolls": 0,
-                "initial_spot": 0.0,
-                "ce_ticker": None,
-                "pe_ticker": None,
-                "ce_entry_price": 0.0,
-                "pe_entry_price": 0.0,
-                "qty": 0,
-                "realized_pnl": 0.0,
-                "status_message": "Not running",
-                "last_update": ""
-            }
-            with open(STATE_FILE, "w") as f:
-                json.dump(default_state, f, indent=4)
-            return default_state
-        try:
-            with open(STATE_FILE, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            logging.error(f"Error loading straddle state: {e}")
-            return {}
+    return strategy.load_state()
 
 def save_state(state):
-    with _state_lock:
-        try:
-            state["last_update"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with open(STATE_FILE, "w") as f:
-                json.dump(state, f, indent=4)
-        except Exception as e:
-            logging.error(f"Error saving straddle state: {e}")
+    strategy.save_state(state)
 
 def start_strategy(kite, index_name, lots, rolling_threshold_pct, max_sl, max_rolls, start_time_str, end_time_str):
     state = load_state()
@@ -82,41 +67,31 @@ def start_strategy(kite, index_name, lots, rolling_threshold_pct, max_sl, max_ro
     state["status_message"] = "Initializing..."
     save_state(state)
     
-    global _monitor_thread, _stop_event
-    _stop_event.clear()
-    _monitor_thread = threading.Thread(target=_monitor_loop, args=(kite,), name="straddle_monitor_thread", daemon=True)
-    _monitor_thread.start()
-    
-    return True, f"Strategy initialized for {index_name}. Running in background."
+    success, msg = strategy.start_thread(kite, _monitor_loop, "straddle_monitor_thread")
+    if success:
+        return True, f"Strategy initialized for {index_name}. Running in background."
+    else:
+        return False, msg
 
 def stop_strategy(kite):
     state = load_state()
     if not state.get("is_running"):
         return False, "Strategy is not running."
         
-    global _stop_event
-    _stop_event.set()
+    strategy.stop_thread()
     
     _exit_active_positions(kite, state, "Manual stop request")
     return True, "Strategy stopped. All active straddle positions squared off."
 
 def init_rolling_straddle_on_startup(kite):
-    state = load_state()
-    if state.get("is_running"):
-        global _monitor_thread, _stop_event
-        # Check if thread is already active
-        for t in threading.enumerate():
-            if t.name == "straddle_monitor_thread" and t.is_alive():
-                return
-                
-        logging.info("Auto-restarting Rolling Straddle background monitor thread on startup...")
-        _stop_event.clear()
-        _monitor_thread = threading.Thread(target=_monitor_loop, args=(kite,), name="straddle_monitor_thread", daemon=True)
-        _monitor_thread.start()
+    strategy.init_on_startup(kite, _monitor_loop, "straddle_monitor_thread")
+
+def _send_alert(msg):
+    strategy.send_alert(msg)
 
 def _monitor_loop(kite):
     logging.info("Starting Rolling Straddle background monitor thread...")
-    while not _stop_event.is_set():
+    while not strategy.is_stopped():
         state = load_state()
         if not state.get("is_running"):
             break
@@ -132,7 +107,7 @@ def _monitor_loop(kite):
             if now < start_time:
                 state["status_message"] = f"Waiting for start time {state['start_time']}..."
                 save_state(state)
-                _stop_event.wait(10)
+                strategy.wait(10)
                 continue
                 
             if now >= end_time:
@@ -150,7 +125,7 @@ def _monitor_loop(kite):
         except Exception as e:
             logging.error(f"Error in Rolling Straddle monitor loop: {e}", exc_info=True)
             
-        _stop_event.wait(5)
+        strategy.wait(5)
         
     logging.info("Rolling Straddle background monitor thread stopped.")
 
@@ -448,32 +423,41 @@ def _execute_roll(kite, state, current_spot, ce_exit_price, pe_exit_price):
 def _exit_active_positions(kite, state, reason):
     index_name = state["index_name"]
     qty = state["qty"]
+    exch = "NFO" if index_name == "NIFTY" else "BFO"
     
     ce_ticker = state.get("ce_ticker")
     pe_ticker = state.get("pe_ticker")
-    exch = "NFO" if index_name == "NIFTY" else "BFO"
     
-    ce_exit = state.get("ce_entry_price", 0.0)
-    pe_exit = state.get("pe_entry_price", 0.0)
-    
-    if ce_ticker and pe_ticker:
+    # Exit CE if active
+    if ce_ticker:
+        ce_exit = state.get("ce_entry_price", 0.0)
         try:
-            opt_quotes = kite.ltp([f"{exch}:{ce_ticker}", f"{exch}:{pe_ticker}"])
+            opt_quotes = kite.ltp([f"{exch}:{ce_ticker}"])
             ce_exit = opt_quotes[f"{exch}:{ce_ticker}"]['last_price']
+        except Exception as e:
+            logging.error(f"Failed to fetch CE LTP for square-off: {e}")
+        paper_trader.exit_trade(ce_ticker, kite, override_price=ce_exit)
+        pnl_ce = (state["ce_entry_price"] - ce_exit) * qty
+        state["realized_pnl"] += pnl_ce
+        logging.info(f"Closed CE leg: {ce_ticker} @ {ce_exit:.2f}, realized P&L: {pnl_ce:.2f}")
+        state["ce_ticker"] = None
+        state["ce_entry_price"] = 0.0
+        
+    # Exit PE if active
+    if pe_ticker:
+        pe_exit = state.get("pe_entry_price", 0.0)
+        try:
+            opt_quotes = kite.ltp([f"{exch}:{pe_ticker}"])
             pe_exit = opt_quotes[f"{exch}:{pe_ticker}"]['last_price']
         except Exception as e:
-            logging.error(f"Failed to fetch option LTPs for square-off: {e}")
-            
-        paper_trader.exit_trade(ce_ticker, kite, override_price=ce_exit)
+            logging.error(f"Failed to fetch PE LTP for square-off: {e}")
         paper_trader.exit_trade(pe_ticker, kite, override_price=pe_exit)
-        
-        pnl_ce = (state["ce_entry_price"] - ce_exit) * qty
         pnl_pe = (state["pe_entry_price"] - pe_exit) * qty
-        cycle_pnl = pnl_ce + pnl_pe
-        state["realized_pnl"] += cycle_pnl
+        state["realized_pnl"] += pnl_pe
+        logging.info(f"Closed PE leg: {pe_ticker} @ {pe_exit:.2f}, realized P&L: {pnl_pe:.2f}")
+        state["pe_ticker"] = None
+        state["pe_entry_price"] = 0.0
         
-    state["ce_ticker"] = None
-    state["pe_ticker"] = None
     state["is_running"] = False
     state["status_message"] = f"Stopped: {reason} | Final MTM: ₹{state['realized_pnl']:.2f}"
     save_state(state)
@@ -505,15 +489,3 @@ def _find_atm_options(kite, index_name, strike):
     pe_info = pe_row.iloc[0].to_dict() if not pe_row.empty else None
     
     return ce_info, pe_info
-
-def _send_alert(msg):
-    bot_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
-    chat_id = getattr(config, 'TELEGRAM_PERSONAL_CHAT_ID', '') or getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', getattr(config, 'TELEGRAM_CHAT_ID', ''))
-    if bot_token and chat_id:
-        telegram_agent.send_message(msg, bot_token, chat_id, parse_mode="Markdown")
-        
-    try:
-        import option_desk_manager
-        option_desk_manager.add_notification_to_shared("Straddle", msg.replace("*", "").replace("`", ""))
-    except Exception as e:
-        logging.error(f"Failed to save shared notification for straddle: {e}")

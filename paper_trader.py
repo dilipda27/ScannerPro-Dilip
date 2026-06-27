@@ -11,14 +11,40 @@ import config
 
 _trader_lock = threading.RLock()
 
-PORTFOLIO_FILE = "paper_portfolio.csv"
-HISTORY_FILE = "paper_trade_history.csv"
-SWING_FILE = "swing_trades.csv"
-SWING_ARCHIVE_FILE = "swing_trades_archived.csv"
-ARCHIVE_FILE = "paper_trade_archive.csv"
-OPTIONS_HISTORY_FILE = "options_trade_history.csv"
-OPTIONS_ARCHIVE_FILE = "options_trade_archive.csv"
-_INSTRUMENT_CACHE_FILE = "_instrument_token_cache.json"
+def _safe_to_csv(df, filepath, max_retries=10, delay=0.1):
+    """Writes a DataFrame to CSV with retry logic to handle file locking in Windows."""
+    import time
+    for attempt in range(max_retries):
+        try:
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            df.to_csv(filepath, index=False)
+            return True
+        except PermissionError:
+            time.sleep(delay)
+    df.to_csv(filepath, index=False)
+    return True
+
+def _safe_to_csv_append(df, filepath, max_retries=10, delay=0.1):
+    """Appends a DataFrame to CSV with retry logic to handle file locking in Windows."""
+    import time
+    for attempt in range(max_retries):
+        try:
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            df.to_csv(filepath, mode='a', header=False, index=False)
+            return True
+        except PermissionError:
+            time.sleep(delay)
+    df.to_csv(filepath, mode='a', header=False, index=False)
+    return True
+
+PORTFOLIO_FILE = os.path.join("data", "trades", "paper_portfolio.csv")
+HISTORY_FILE = os.path.join("data", "trades", "paper_trade_history.csv")
+SWING_FILE = os.path.join("data", "trades", "swing_trades.csv")
+SWING_ARCHIVE_FILE = os.path.join("data", "trades", "swing_trades_archived.csv")
+ARCHIVE_FILE = os.path.join("data", "trades", "paper_trade_archive.csv")
+OPTIONS_HISTORY_FILE = os.path.join("data", "trades", "options_trade_history.csv")
+OPTIONS_ARCHIVE_FILE = os.path.join("data", "trades", "options_trade_archive.csv")
+_INSTRUMENT_CACHE_FILE = os.path.join("data", "cache", "_instrument_token_cache.json")
 
 def get_exchange_prefix(ticker):
     """Determine the exchange (NSE/NFO/BFO) based on ticker name."""
@@ -92,22 +118,22 @@ def get_portfolio():
             if not df.empty and 'Status' in df.columns:
                 if (df['Status'] == 'OPEN').any():
                     df.loc[df['Status'] == 'OPEN', 'Status'] = 'Active'
-                    df.to_csv(PORTFOLIO_FILE, index=False) # Save migration
+                    _safe_to_csv(df, PORTFOLIO_FILE) # Save migration
             
             # Migrate/Ensure Strategy column exists
             if not df.empty and 'Strategy' not in df.columns:
                 df['Strategy'] = "15-Min ORB"
-                df.to_csv(PORTFOLIO_FILE, index=False)
+                _safe_to_csv(df, PORTFOLIO_FILE)
                 
             # Migrate/Ensure InitialSL column exists
             if not df.empty and 'InitialSL' not in df.columns:
                 df['InitialSL'] = df['SL']
-                df.to_csv(PORTFOLIO_FILE, index=False)
+                _safe_to_csv(df, PORTFOLIO_FILE)
                 
             # Migrate/Ensure Delta column exists
             if not df.empty and 'Delta' not in df.columns:
                 df['Delta'] = None
-                df.to_csv(PORTFOLIO_FILE, index=False)
+                _safe_to_csv(df, PORTFOLIO_FILE)
                 
             # Clean up any existing duplicates (same Ticker and Status)
             if not df.empty:
@@ -145,7 +171,7 @@ def execute_paper_trade(ticker, trade_type, entry_price, sl, qty, token=None, st
             df = pd.DataFrame([new_trade])
         else:
             df = pd.concat([df, pd.DataFrame([new_trade])], ignore_index=True)
-        df.to_csv(PORTFOLIO_FILE, index=False)
+        _safe_to_csv(df, PORTFOLIO_FILE)
         logging.info(f"🚀 Paper Trade Executed: {trade_type} ({strategy}) {ticker} @ {entry_price} (SL: {sl}, Target: {target}, Qty: {qty})")
         return True
 
@@ -221,20 +247,51 @@ def exit_trade(ticker, kite, override_price=None):
                             combined_history = history_df
                         else:
                             combined_history = pd.concat([existing_history, history_df], ignore_index=True, sort=False)
-                        combined_history.to_csv(dest_file, index=False)
+                        _safe_to_csv(combined_history, dest_file)
                     else:
                         logging.warning(f"⚠️ exit_trade: Duplicate entry for {trade['Ticker']} (Entry: {trade['EntryTime']}) already exists in history. Skipping history append.")
                 except Exception as read_err:
                     logging.warning(f"Error appending history: {read_err}. Overwriting.")
-                    history_df.to_csv(dest_file, index=False)
+                    _safe_to_csv(history_df, dest_file)
             else:
-                history_df.to_csv(dest_file, index=False)
+                _safe_to_csv(history_df, dest_file)
                 
             # Update status and exit price in portfolio file instead of removing
             df.loc[(df['Ticker'] == ticker) & (df['Status'] == 'Active'), 'Current Price'] = actual_exit_price
             df.loc[(df['Ticker'] == ticker) & (df['Status'] == 'Active'), 'Status'] = 'Closed'
-            df.to_csv(PORTFOLIO_FILE, index=False)
+            _safe_to_csv(df, PORTFOLIO_FILE)
             
+            # Auto-clear strategy state variables on manual close
+            strategy_name = trade.get('Strategy')
+            if strategy_name == "Option Desk":
+                try:
+                    import option_desk_manager
+                    state_od = option_desk_manager.load_state()
+                    if state_od.get("ce_ticker") == ticker:
+                        state_od["ce_ticker"] = None
+                        state_od["ce_entry_price"] = 0.0
+                        option_desk_manager.save_state(state_od)
+                    elif state_od.get("pe_ticker") == ticker:
+                        state_od["pe_ticker"] = None
+                        state_od["pe_entry_price"] = 0.0
+                        option_desk_manager.save_state(state_od)
+                except Exception as ex:
+                    logging.error(f"Failed to update option desk state on exit_trade: {ex}")
+            elif strategy_name == "Rolling Straddle":
+                try:
+                    import rolling_straddle_manager
+                    state_rs = rolling_straddle_manager.load_state()
+                    if state_rs.get("ce_ticker") == ticker:
+                        state_rs["ce_ticker"] = None
+                        state_rs["ce_entry_price"] = 0.0
+                        rolling_straddle_manager.save_state(state_rs)
+                    elif state_rs.get("pe_ticker") == ticker:
+                        state_rs["pe_ticker"] = None
+                        state_rs["pe_entry_price"] = 0.0
+                        rolling_straddle_manager.save_state(state_rs)
+                except Exception as ex:
+                    logging.error(f"Failed to update straddle state on exit_trade: {ex}")
+
             logging.info(f"🚪 Paper Trade Closed & Archived: {ticker} @ {exit_price}")
             return True
         except Exception as e:
@@ -275,12 +332,12 @@ def archive_history():
                 try:
                     arch_df = pd.read_csv(arch_file)
                     combined = pd.concat([arch_df, df], ignore_index=True, sort=False)
-                    combined.to_csv(arch_file, index=False)
+                    _safe_to_csv(combined, arch_file)
                 except Exception as e:
                     logging.error(f"Error merging with archive {arch_file}, falling back to append: {e}")
-                    df.to_csv(arch_file, mode='a', header=False, index=False)
+                    _safe_to_csv_append(df, arch_file)
             else:
-                df.to_csv(arch_file, index=False)
+                _safe_to_csv(df, arch_file)
                 
             # Delete daily history file
             os.remove(hist_file)
@@ -294,7 +351,7 @@ def archive_history():
         try:
             pdf = pd.read_csv(PORTFOLIO_FILE)
             pdf = pdf[pdf['Status'] == 'Active'] # Only keep active trades for the new day
-            pdf.to_csv(PORTFOLIO_FILE, index=False)
+            p_safe_to_csv(df, PORTFOLIO_FILE)
         except Exception as e:
             logging.error(f"Error cleaning up portfolio file: {e}")
 
@@ -310,7 +367,7 @@ def clear_portfolio_by_strategy(strategy: str):
     df = get_portfolio()
     if not df.empty and 'Strategy' in df.columns:
         filtered_df = df[df['Strategy'] != strategy]
-        filtered_df.to_csv(PORTFOLIO_FILE, index=False)
+        filtered__safe_to_csv(df, PORTFOLIO_FILE)
         logging.info(f"🧹 Paper Portfolio Cleared for strategy: {strategy}")
     return True
 
@@ -501,11 +558,11 @@ def archive_and_clear_old_option_trades():
                             continue
                     dest_df = pd.concat([dest_df, pd.DataFrame([row.to_dict()])], ignore_index=True, sort=False)
                     
-                dest_df.to_csv(dest_file, index=False)
+                _safe_to_csv(dest_df, dest_file)
                 
             # Remove from portfolio and save
             df = df.drop(to_clear_mask)
-            df.to_csv(PORTFOLIO_FILE, index=False)
+            _safe_to_csv(df, PORTFOLIO_FILE)
             logging.info(f"🧹 Archived and cleared {len(to_clear_mask)} old option trades from {PORTFOLIO_FILE}")
             
         except Exception as e:
@@ -542,7 +599,7 @@ def update_portfolio_pnl(kite):
                         for t_sym, t_val in token_map.items():
                             df.loc[(df['Ticker'] == t_sym) & (df['Status'] == 'Active'), 'Token'] = t_val
                             active_trades.loc[active_trades['Ticker'] == t_sym, 'Token'] = t_val
-                        df.to_csv(PORTFOLIO_FILE, index=False)
+                        _safe_to_csv(df, PORTFOLIO_FILE)
                 except Exception as e:
                     logging.warning(f"Intraday token auto-fix failed: {e}")
                     
@@ -603,7 +660,7 @@ def update_portfolio_pnl(kite):
                         df.loc[(df['Ticker'] == row['Ticker']) & (df['Status'] == 'Active'), 'SL'] = new_sl
                         processed_df.at[idx, 'SL'] = new_sl
                         row['SL'] = new_sl # Update for the hit check below
-                        df.to_csv(PORTFOLIO_FILE, index=False) # Persist trail
+                        _safe_to_csv(df, PORTFOLIO_FILE) # Persist trail
                         logging.info(f"🛡️ Multi-Stage Trail: {row['Ticker']} Stop-Loss moved from ₹{current_sl:.2f} to ₹{new_sl:.2f} (Entry: ₹{entry:.2f}, LTP: ₹{ltp:.2f})")
     
                 is_hit = False
@@ -794,7 +851,7 @@ def execute_swing_trade(ticker, entry_price, target, sl, qty, token=None):
         df = pd.DataFrame([new_trade])
     else:
         df = pd.concat([df, pd.DataFrame([new_trade])], ignore_index=True)
-    df.to_csv(SWING_FILE, index=False)
+    _safe_to_csv(df, SWING_FILE)
     logging.info(f"📈 Positional Swing Trade Executed: {ticker} @ {entry_price} (Target: {target}, SL: {sl})")
     return True
 
@@ -823,7 +880,7 @@ def update_swing_portfolio(kite):
                 for t_sym, t_val in token_map.items():
                     df.loc[(df['Ticker'] == t_sym) & (df['Status'] == 'OPEN'), 'Token'] = t_val
                     open_trades.loc[open_trades['Ticker'] == t_sym, 'Token'] = t_val
-                df.to_csv(SWING_FILE, index=False)
+                _safe_to_csv(df, SWING_FILE)
         except Exception as e:
             logging.warning(f"Token auto-fix failed: {e}")
 
@@ -1013,13 +1070,13 @@ def update_swing_portfolio(kite):
                 archive_df = pd.concat([archive_df, closed_trades], ignore_index=True)
             else:
                 archive_df = closed_trades
-            archive_df.to_csv(SWING_ARCHIVE_FILE, index=False)
+            _safe_to_csv(archive_df, SWING_ARCHIVE_FILE)
             logging.info(f"📁 Archived {len(closed_trades)} completed swing trades to {SWING_ARCHIVE_FILE}")
             
             # Remove from active file
             df = df[~closed_mask]
 
-        df.to_csv(SWING_FILE, index=False)
+        _safe_to_csv(df, SWING_FILE)
         return df
         
     except Exception as e:
@@ -1338,7 +1395,7 @@ def log_intraday_pnl_snapshot(kite):
         else:
             combined = new_df
             
-        combined.to_csv(INTRADAY_PNL_LOG_FILE, index=False)
+        _safe_to_csv(combined, INTRADAY_PNL_LOG_FILE)
         
     except Exception as e:
         logging.error(f"Error logging intraday P&L snapshot: {e}", exc_info=True)

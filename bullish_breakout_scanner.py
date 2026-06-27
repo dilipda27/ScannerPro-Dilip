@@ -10,7 +10,7 @@ import scanner
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-BULLISH_CACHE_FILE = "fno_strength_cache.csv"
+BULLISH_CACHE_FILE = os.path.join("data", "cache", "fno_strength_cache.csv")
 
 def cache_bullish_candidates(kite, progress_callback=None, refresh_only=False):
     """
@@ -76,6 +76,8 @@ def cache_bullish_candidates(kite, progress_callback=None, refresh_only=False):
             # 3. Early Momentum Filter (If refreshing between 9:20 - 9:30)
             if refresh_only:
                 from_intra = to_date.replace(hour=9, minute=15, second=0, microsecond=0)
+                if from_intra > to_date:
+                    from_intra = from_intra - datetime.timedelta(days=1)
                 df_intra = kite_scanner.fetch_kite_data(kite, token, from_intra, to_date, "5minute")
                 if not df_intra.empty:
                     today_open = df_intra.iloc[0]['open']
@@ -145,6 +147,8 @@ def scan_bullish_breakouts(kite, progress_callback=None):
         to_date = pytz.timezone('Asia/Kolkata').localize(to_date)
         
     from_date_intra = to_date.replace(hour=9, minute=15, second=0, microsecond=0)
+    if from_date_intra > to_date:
+        from_date_intra = from_date_intra - datetime.timedelta(days=1)
     
     # --- BROAD MARKET TREND CHECK (NIFTY 50) ---
     nifty_bullish = False
@@ -153,6 +157,8 @@ def scan_bullish_breakouts(kite, progress_callback=None):
         if nifty_token_map and "NIFTY 50" in nifty_token_map:
             nifty_token = nifty_token_map["NIFTY 50"]
             nifty_from = to_date.replace(hour=9, minute=15, second=0, microsecond=0)
+            if nifty_from > to_date:
+                nifty_from = nifty_from - datetime.timedelta(days=1)
             nifty_df = kite_scanner.fetch_kite_data(kite, nifty_token, nifty_from, to_date, "5minute")
             if not nifty_df.empty:
                 nifty_open = nifty_df.iloc[0]['open']

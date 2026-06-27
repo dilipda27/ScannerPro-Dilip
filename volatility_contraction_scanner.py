@@ -47,8 +47,8 @@ logging.basicConfig(
 )
 
 # Constants
-CACHE_FILE = "proximity_filter_cache.json"
-WATCHLIST_FILE = "volatility_contraction_watchlist.json"
+CACHE_FILE = os.path.join("data", "cache", "proximity_filter_cache.json")
+WATCHLIST_FILE = os.path.join("data", "cache", "volatility_contraction_watchlist.json")
 NIFTY500_URL = "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv"
 
 
@@ -86,8 +86,8 @@ def fetch_nifty500_symbols():
     logging.info("📡 Fetching Nifty F&O symbols from NSE...")
     import os
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    cache_500 = "nifty500_local_cache.csv"
-    cache_fno = "fo_mktlots_local_cache.csv"
+    cache_500 = os.path.join("data", "cache", "nifty500_local_cache.csv")
+    cache_fno = os.path.join("data", "cache", "fo_mktlots_local_cache.csv")
     
     # 1. Fetch Nifty 500
     nifty500_symbols = set()
@@ -157,7 +157,7 @@ def fetch_nifty500_symbols():
                 
         if not loaded_fno_cache:
             # Parse FNO list from local kite_instruments_nfo.csv if available
-            kite_inst_file = "kite_instruments_nfo.csv"
+            kite_inst_file = os.path.join("data", "cache", "kite_instruments_nfo.csv")
             if os.path.exists(kite_inst_file):
                 try:
                     df_inst = pd.read_csv(kite_inst_file)
@@ -650,7 +650,7 @@ class IntradayLiveMonitor:
                             try:
                                 import json
                                 import os
-                                SHARED_NOTIFICATIONS_FILE = "shared_notifications.json"
+                                SHARED_NOTIFICATIONS_FILE = os.path.join("data", "state", "shared_notifications.json")
                                 data = []
                                 if os.path.exists(SHARED_NOTIFICATIONS_FILE):
                                     with open(SHARED_NOTIFICATIONS_FILE, "r") as f:
@@ -736,7 +736,7 @@ class IntradayLiveMonitor:
                             try:
                                 import json
                                 import os
-                                SHARED_NOTIFICATIONS_FILE = "shared_notifications.json"
+                                SHARED_NOTIFICATIONS_FILE = os.path.join("data", "state", "shared_notifications.json")
                                 data = []
                                 if os.path.exists(SHARED_NOTIFICATIONS_FILE):
                                     with open(SHARED_NOTIFICATIONS_FILE, "r") as f:

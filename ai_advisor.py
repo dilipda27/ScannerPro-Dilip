@@ -3,6 +3,7 @@ import requests
 import json
 import pandas as pd
 import logging
+import os
 
 def analyze_stocks(df, gemini_api_key, strategy_name="Swing"):
     """
@@ -87,7 +88,7 @@ Keep your analysis concise, professional, and actionable. Do not provide general
                 }
                 headers = {'Content-Type': 'application/json'}
                 
-                response = requests.post(url, headers=headers, data=json.dumps(payload))
+                response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
                 res_data = response.json()
                 
                 if response.status_code == 200:
@@ -153,7 +154,7 @@ def analyze_active_positions(prompt, gemini_api_key):
                 }
                 headers = {'Content-Type': 'application/json'}
                 
-                response = requests.post(url, headers=headers, data=json.dumps(payload))
+                response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=10)
                 res_data = response.json()
                 
                 if response.status_code == 200:
@@ -184,7 +185,7 @@ def analyze_active_positions(prompt, gemini_api_key):
                 
     return f"Error: All AI models are currently unavailable. Last Error: {last_error}"
 
-SETTINGS_FILE = ".ai_advisor_settings.json"
+SETTINGS_FILE = os.path.join("data", "state", ".ai_advisor_settings.json")
 
 def is_ai_advisor_enabled() -> bool:
     """Helper to check if the AI Active Positions Advisor monitor is enabled."""

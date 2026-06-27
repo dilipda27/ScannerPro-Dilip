@@ -5,6 +5,27 @@ import chart_helper
 import os
 import datetime
 
+def _execute_post_with_retry(url, data=None, json=None, files=None, timeout=10, max_retries=3):
+    """
+    Executes a POST request with retries and exponential backoff to handle transient network issues.
+    """
+    import time
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, data=data, json=json, files=files, timeout=timeout)
+            response.raise_for_status()
+            return response
+        except (requests.exceptions.ConnectTimeout, requests.exceptions.Timeout) as e:
+            if attempt == max_retries - 1:
+                logging.error(f"Telegram request timed out after {max_retries} attempts: {e}")
+                raise e
+            wait_time = 2 ** attempt
+            logging.warning(f"Telegram connection timed out. Retrying in {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
+            time.sleep(wait_time)
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Telegram request failed with network error: {e}")
+            raise e
+
 def send_message(text: str, bot_token: str, chat_id: str, parse_mode: str = None):
     """
     Sends a generic text message to a Telegram chat.
@@ -22,8 +43,7 @@ def send_message(text: str, bot_token: str, chat_id: str, parse_mode: str = None
         payload["parse_mode"] = parse_mode
     
     try:
-        response = requests.post(url, json=payload)
-        response.raise_for_status()
+        response = _execute_post_with_retry(url, json=payload)
         logging.info("Telegram message sent successfully.")
         return True
     except Exception as e:
@@ -35,7 +55,7 @@ def send_photo(photo_path: str, caption: str, bot_token: str, chat_id: str, pars
     Uploads a photo to Telegram with an optional caption.
     """
     if not bot_token or not chat_id:
-        logging.warning("Telegram credentials missing.")
+        logging.warning("Telegram credentials missing. Cannot send photo.")
         return False
         
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
@@ -49,8 +69,7 @@ def send_photo(photo_path: str, caption: str, bot_token: str, chat_id: str, pars
     try:
         with open(photo_path, "rb") as photo_file:
             files = {"photo": photo_file}
-            response = requests.post(url, data=data, files=files)
-            response.raise_for_status()
+            response = _execute_post_with_retry(url, data=data, files=files)
             logging.info("Telegram photo sent successfully.")
             return True
     except Exception as e:
