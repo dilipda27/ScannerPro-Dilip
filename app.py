@@ -258,7 +258,8 @@ def show_help_dialog():
         st.error("Documentation file missing.")
 
 # --- MAIN APP TABS ---
-tab_scanners, tab_intraday, tab_swing, tab_option_desk = st.tabs(["🔍 Scanners", "💼 Intraday Paper Trades", "📊 Swing Trades", "📈 Option Desk"])
+tab_scanners, tab_intraday, tab_swing, tab_option_desk, tab_backtest = st.tabs(["🔍 Scanners", "💼 Intraday Paper Trades", "📊 Swing Trades", "📈 Option Desk", "📉 Backtesting"])
+
 
 # Cache expensive Kite LTP calls for 60 s to avoid repeated fetches on every widget interaction
 @st.cache_data(ttl=60, show_spinner=False)
@@ -1311,6 +1312,127 @@ with tab_option_desk:
         except Exception as e:
             st.warning(f"Swing Portfolio update paused: {e}")
         st.markdown("---")
+    
+    with tab_backtest:
+        st.markdown("## 📉 Historical Strategy Backtester")
+        st.markdown("Upload historical CSV data (minute or daily candles) and run backtesting simulations to evaluate performance.")
+        
+        import backtester
+        
+        # 1. Backtesting Strategy Selector
+        bt_strategies = [
+            "Bullish Breakout (Intraday)",
+            "Bearish Breakdown (Intraday)",
+            "Bullish VWAP Rejection (Intraday)",
+            "Bearish VWAP Rejection (Intraday)",
+            "52-Week High Breakout",
+            "15-Min ORB Breakout (Intraday)"
+        ]
+        
+        col_bt1, col_bt2 = st.columns([1, 1])
+        with col_bt1:
+            bt_strat = st.selectbox("Select Backtesting Strategy", bt_strategies, key="bt_strat_sel")
+            uploaded_file = st.file_uploader("Upload Historical Data CSV (columns: datetime/date, open, high, low, close, volume)", type=["csv"], key="bt_file_uploader")
+            bt_ticker = st.text_input("Ticker Name (Optional Filter)", value="", key="bt_ticker_input")
+            
+        with col_bt2:
+            bt_capital = st.number_input("Starting Capital (₹)", value=250000, step=50000, key="bt_capital_input")
+            bt_risk = st.number_input("Risk Per Trade (%)", value=1.0, step=0.5, key="bt_risk_input")
+            bt_slippage = st.number_input("Slippage Per Trade (%)", value=0.05, step=0.01, format="%.3f", key="bt_slippage_input")
+            
+        if uploaded_file is not None:
+            if st.button("🚀 Run Backtest Simulation", type="primary", key="btn_run_backtest"):
+                with st.spinner("Processing historical data and running simulation..."):
+                    try:
+                        # Load dataframe
+                        raw_df = pd.read_csv(uploaded_file)
+                        
+                        # Add a callback to show progress in Streamlit
+                        progress_bar_bt = st.progress(0)
+                        status_text_bt = st.empty()
+                        
+                        def update_bt_progress(processed, total, day):
+                            pct = min(processed / total, 1.0)
+                            progress_bar_bt.progress(pct)
+                            status_text_bt.text(f"Processed: {day} ({processed}/{total})")
+                            
+                        trades_df, equity_df, stats = backtester.run_backtest(
+                            raw_df,
+                            strategy=bt_strat,
+                            capital=bt_capital,
+                            risk_pct=bt_risk,
+                            slippage_pct=bt_slippage,
+                            ticker=bt_ticker if bt_ticker.strip() != "" else None,
+                            progress_callback=update_bt_progress
+                        )
+                        
+                        progress_bar_bt.empty()
+                        status_text_bt.empty()
+                        
+                        st.success("✅ Backtest simulation completed successfully!")
+                        
+                        # Display Stats
+                        st.markdown("### 📊 Simulation Summary Statistics")
+                        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+                        stat_col1.metric("Total Trades", f"{stats.get('Total Trades', 0)}")
+                        stat_col1.metric("Win Rate (%)", f"{stats.get('Win Rate', 0.0):.2f}%")
+                        stat_col2.metric("Total Profit (₹)", f"₹{stats.get('Total Profit', 0.0):,.2f}")
+                        stat_col2.metric("Max Drawdown (₹)", f"₹{stats.get('Max Drawdown', 0.0):,.2f}")
+                        stat_col3.metric("Profit Factor", f"{stats.get('Profit Factor', 0.0):.2f}" if stats.get('Profit Factor') != float('inf') else "∞")
+                        stat_col3.metric("Max Drawdown (%)", f"{stats.get('Max Drawdown %', 0.0):.2f}%")
+                        stat_col4.metric("Sharpe Ratio", f"{stats.get('Sharpe Ratio', 0.0):.2f}")
+                        
+                        # Plot Cumulative PnL / Equity Curve
+                        if not equity_df.empty:
+                            st.markdown("### 📈 Equity Curve")
+                            import plotly.graph_objects as go
+                            fig_bt = go.Figure()
+                            fig_bt.add_trace(go.Scatter(
+                                x=equity_df['ExitDateOnly'],
+                                y=equity_df['Equity'],
+                                mode='lines+markers',
+                                line=dict(color='#3b82f6', width=3),
+                                fill='tozeroy',
+                                fillcolor='rgba(59, 130, 246, 0.08)',
+                                name='Equity (₹)'
+                            ))
+                            fig_bt.update_layout(
+                                margin=dict(l=20, r=20, t=35, b=20),
+                                height=350,
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                xaxis=dict(showgrid=True, gridcolor='#e2e8f0'),
+                                yaxis=dict(showgrid=True, gridcolor='#e2e8f0')
+                            )
+                            st.plotly_chart(fig_bt, use_container_width=True)
+                            
+                        # Show Detailed Trades table
+                        st.markdown("### 📜 Executed Transactions List")
+                        if not trades_df.empty:
+                            # Re-order columns for display
+                            cols_to_disp = [c for c in ['Ticker', 'Type', 'EntryTime', 'EntryPrice', 'Qty', 'SL', 'Target', 'ExitTime', 'ExitPrice', 'Status', 'PnL'] if c in trades_df.columns]
+                            st.dataframe(
+                                trades_df[cols_to_disp].style.format({
+                                    "EntryPrice": "₹{:.2f}",
+                                    "ExitPrice": "₹{:.2f}",
+                                    "SL": "₹{:.2f}",
+                                    "Target": "₹{:.2f}",
+                                    "PnL": "₹{:.2f}"
+                                }).map(style_pnl, subset=['PnL']),
+                                use_container_width=True
+                            )
+                        else:
+                            st.info("No trades were executed during this backtest timeframe.")
+                            
+                    except Exception as bt_err:
+                        st.error(f"Error executing backtest simulation: {bt_err}")
+                        import traceback
+                        st.code(traceback.format_exc())
+        else:
+            st.info("ℹ️ Please upload a historical CSV data file to begin.")
+        
+        st.markdown("---")
+
     
 # --- NOTIFICATION CENTER (SIDEBAR) ---
 st.sidebar.markdown("### 🔔 Activity Feed")
