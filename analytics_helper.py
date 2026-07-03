@@ -191,9 +191,14 @@ def render_analytics_tab(portfolio_df):
     if lens_choice != "ALL (Combined)":
         filtered_df = filtered_df[filtered_df['AssetClass'] == lens_choice]
         
-    if len(selected_range) == 2:
+    # Handle date selection tuple
+    if isinstance(selected_range, (list, tuple)) and len(selected_range) == 2:
         start_dt = pd.to_datetime(selected_range[0]).tz_localize(None)
         end_dt = pd.to_datetime(selected_range[1]).tz_localize(None) + datetime.timedelta(days=1)
+        filtered_df = filtered_df[(filtered_df['ExitTime'] >= start_dt) & (filtered_df['ExitTime'] < end_dt)]
+    elif isinstance(selected_range, datetime.date):
+        start_dt = pd.to_datetime(selected_range).tz_localize(None)
+        end_dt = start_dt + datetime.timedelta(days=1)
         filtered_df = filtered_df[(filtered_df['ExitTime'] >= start_dt) & (filtered_df['ExitTime'] < end_dt)]
         
     if filtered_df.empty:
