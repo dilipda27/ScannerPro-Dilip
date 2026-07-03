@@ -1343,34 +1343,41 @@ with tab_option_desk:
         if uploaded_file is not None:
             # Parse dates to show range selector
             try:
-                # Read a quick sample or headers first
-                sample_df = pd.read_csv(uploaded_file, nrows=10)
-                # Find datetime column
+                # Load full dataframe to parse date bounds
+                raw_df = pd.read_csv(uploaded_file)
+                
+                # Find datetime column dynamically
                 dt_col = None
-                for col in sample_df.columns:
+                for col in raw_df.columns:
                     if str(col).lower().strip() in ['datetime', 'date', 'time', 'timestamp']:
                         dt_col = col
                         break
                 
-                # Load full dataframe to parse date bounds
-                raw_df = pd.read_csv(uploaded_file)
                 if dt_col:
-                    raw_df[dt_col] = pd.to_datetime(raw_df[dt_col])
-                    min_date = raw_df[dt_col].min().date()
-                    max_date = raw_df[dt_col].max().date()
+                    raw_df[dt_col] = pd.to_datetime(raw_df[dt_col], errors='coerce')
+                    # Drop any unparseable rows
+                    raw_df = raw_df.dropna(subset=[dt_col])
                     
-                    st.markdown("#### 📅 Filter Backtest Timeframe")
-                    selected_range = st.date_input(
-                        "Select Backtest Date Range", 
-                        value=(min_date, max_date), 
-                        min_value=min_date, 
-                        max_value=max_date,
-                        key="bt_date_range"
-                    )
+                    if not raw_df.empty:
+                        min_date = raw_df[dt_col].min().date()
+                        max_date = raw_df[dt_col].max().date()
+                        
+                        st.markdown("#### 📅 Filter Backtest Timeframe")
+                        selected_range = st.date_input(
+                            "Select Backtest Date Range", 
+                            value=(min_date, max_date), 
+                            min_value=min_date, 
+                            max_value=max_date,
+                            key="bt_date_range"
+                        )
+                    else:
+                        selected_range = None
+                        st.warning("⚠️ Date column was found but no dates could be parsed.")
                 else:
                     selected_range = None
             except Exception as parse_err:
                 raw_df = None
+                dt_col = None
                 selected_range = None
                 st.error(f"Error parsing date columns from CSV: {parse_err}")
                 
