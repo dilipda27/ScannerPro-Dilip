@@ -24,7 +24,7 @@ default_state = {
     "target_delta": 0.2,
     "stoploss_delta": 0.5,
     "entry_time": "09:20",
-    "exit_time": "15:15",
+    "exit_time": "15:20",
     "stoploss_action": "Roll",
     "realized_pnl": 0.0,
     "status_message": "Not running",

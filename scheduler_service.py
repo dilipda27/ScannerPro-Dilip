@@ -11,6 +11,7 @@ from requests.adapters import HTTPAdapter
 _original_kite_init = KiteConnect.__init__
 def _patched_kite_init(self, *args, **kwargs):
     _original_kite_init(self, *args, **kwargs)
+    self.timeout = 15
     if hasattr(self, "reqsession"):
         adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100)
         self.reqsession.mount("https://", adapter)
@@ -281,27 +282,64 @@ def run_morning_cache():
         logging.error(f"Error during automated morning tasks: {e}")
 
 def run_auto_square_off():
-    """Square off all open intraday trades at 3:25 PM."""
+    """Square off all active intraday equity trades and option strategies at 3:20 PM."""
     if datetime.datetime.today().weekday() > 4:
         return
 
-    logging.info("🚪 Starting Auto Square-off at 3:25 PM...")
+    logging.info("🚪 Starting Auto Square-off at 3:20 PM...")
     kite = get_kite_instance()
     if not kite:
         return
 
+    # 1. Square off active option strategies
+    try:
+        import rolling_straddle_manager
+        rs_state = rolling_straddle_manager.load_state()
+        if rs_state.get("is_running"):
+            logging.info("Auto-squaring off active Rolling Straddle strategy at 3:20 PM...")
+            rolling_straddle_manager.stop_strategy(kite)
+    except Exception as e:
+        logging.error(f"Error squaring off Rolling Straddle: {e}")
+
+    try:
+        import option_desk_manager
+        od_state = option_desk_manager.load_state()
+        if od_state.get("is_running"):
+            logging.info("Auto-squaring off active Option Desk strategy at 3:20 PM...")
+            option_desk_manager.stop_strategy(kite)
+    except Exception as e:
+        logging.error(f"Error squaring off Option Desk: {e}")
+
+    # 2. Square off active intraday equity trades (exclude options as they are squared off above)
     try:
         import paper_trader
         portfolio = paper_trader.get_portfolio()
-        if portfolio.empty or not (portfolio['Status'] == 'OPEN').any():
-            logging.info("No open intraday trades to square off.")
+        if portfolio.empty:
+            logging.info("No active equity trades to check for auto square-off.")
             return
 
-        open_tickers = portfolio[portfolio['Status'] == 'OPEN']['Ticker'].tolist()
-        for ticker in open_tickers:
+        active_intraday = []
+        for _, row in portfolio[portfolio['Status'] == 'Active'].iterrows():
+            ticker = row['Ticker']
+            strategy = str(row.get('Strategy', ''))
+            
+            is_option = (
+                strategy.lower() in ['option desk', 'rolling straddle'] or
+                any(ticker.endswith(x) for x in ["CE", "PE"]) and any(c.isdigit() for c in ticker)
+            )
+            
+            if not is_option:
+                active_intraday.append(ticker)
+
+        if not active_intraday:
+            logging.info("No active intraday equity trades to square off.")
+            return
+
+        for ticker in active_intraday:
+            logging.info(f"Auto-squaring off intraday equity position: {ticker}")
             paper_trader.exit_trade(ticker, kite)
             
-        logging.info(f"✅ Successfully squared off {len(open_tickers)} trades.")
+        logging.info(f"✅ Successfully squared off {len(active_intraday)} intraday equity trades.")
     except Exception as e:
         logging.error(f"Error during auto square-off: {e}")
 
@@ -658,10 +696,10 @@ schedule.every(5).minutes.do(run_automated_bearish_vwap_rejection)
 # AI Advisor Active Positions monitor (Every 10 minutes between 9:45 AM and 2:45 PM)
 schedule.every(10).minutes.do(run_ai_position_advisor)
 
-# 3:25 PM IST - Auto Square-off
-schedule.every().day.at("15:25").do(run_auto_square_off)
+# 3:20 PM IST - Auto Square-off
+schedule.every().day.at("15:20").do(run_auto_square_off)
 
-logging.info("🕰️ Scheduler Service Started. Monitoring slots, AI position analysis, and 3:25 PM Square-off...")
+logging.info("🕰️ Scheduler Service Started. Monitoring slots, AI position analysis, and 3:20 PM Square-off...")
 
 if __name__ == "__main__":
     while True:

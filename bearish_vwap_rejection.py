@@ -11,6 +11,7 @@ from requests.adapters import HTTPAdapter
 _original_kite_init = KiteConnect.__init__
 def _patched_kite_init(self, *args, **kwargs):
     _original_kite_init(self, *args, **kwargs)
+    self.timeout = 15
     if hasattr(self, "reqsession"):
         adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100)
         self.reqsession.mount("https://", adapter)
@@ -256,13 +257,10 @@ def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None
                  (df_session['low'] <= df_session['ema_9'] + atr_buffer)
                  
     df_session['pullback_touches'] = v_pullback | e_pullback
-    df_session['volume_is_low'] = df_session['volume'] < df_session['vol_ma20']
     
     # 7. ADDED CONVICTION & SAFETY FILTERS
-    if yesterday_low is not None:
-        df_session['below_pdl'] = df_session['close'] < yesterday_low
-    else:
-        df_session['below_pdl'] = True
+    # Relax yesterday's low filter to require being below PD Close and Today's Open (intraday negative trend)
+    df_session['below_pdc_and_open'] = (df_session['close'] < pdc) & (df_session['close'] < df_session['open'].iloc[0])
         
     df_session['rsi_ok'] = df_session['rsi_5m'] >= 30
     df_session['day_change_pct'] = (df_session['close'] - pdc) / pdc * 100
@@ -274,17 +272,19 @@ def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None
     df_session['not_chasing'] = df_session['min_dist_pct'] <= 0.4
     
     candle_range = df_session['high'] - df_session['low']
-    pct_range = 0.6 if nifty_bullish else 0.5
-    df_session['candle_ok'] = (df_session['close'] < (df_session['high'] - pct_range * candle_range)) & (candle_range > 0)
+    df_session['candle_ok'] = (df_session['close'] < (df_session['high'] - 0.6 * candle_range)) & (candle_range > 0)
+    
+    # Volume Filter: Rejection candle volume must confirm institutional activity
+    df_session['vol_ok'] = df_session['volume'] > df_session['vol_ma20'] * 0.8
     
     df_session['trigger_signal'] = (
         df_session['trend_ok'] & 
         df_session['has_broken_down'] & 
         df_session['pullback_touches'] & 
-        df_session['volume_is_low'] & 
         df_session['has_reversal_pattern'] &
-        df_session['below_pdl'] &
+        df_session['below_pdc_and_open'] &
         df_session['rsi_ok'] &
+        df_session['vol_ok'] &
         df_session['not_extended'] &
         df_session['not_chasing'] &
         df_session['candle_ok']
@@ -295,15 +295,20 @@ def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None
     
     for idx, row in triggered_rows.iterrows():
         pos = df_session.index.get_loc(idx)
-        pullback_window = df_session.iloc[max(0, pos-2):pos+1]
+        pullback_window = df_session.iloc[max(0, pos-4):pos+1]
         swing_high = pullback_window['high'].max()
+        vwap_sl = row['vwap'] + (1.5 * row['atr_5m'])
+        sl = max(swing_high, vwap_sl)
         
         entry = row['close']
-        sl = swing_high * 1.001
         risk = sl - entry
         
-        if risk <= entry * 0.003:
-            sl = entry * 1.005
+        # Keep SL within logical bounds (min 0.4% and max 1.5%)
+        if risk <= entry * 0.004:
+            sl = entry * 1.006
+            risk = sl - entry
+        elif risk >= entry * 0.015:
+            sl = entry * 1.015
             risk = sl - entry
             
         target_1 = entry - (1.5 * risk)

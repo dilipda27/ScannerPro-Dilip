@@ -84,6 +84,27 @@ def stop_strategy(kite):
     return True, "Strategy stopped. All active straddle positions squared off."
 
 def init_rolling_straddle_on_startup(kite):
+    state = load_state()
+    if state.get("is_running"):
+        # Check if it's a new day since the last update
+        last_update_str = state.get("last_update", "")
+        if last_update_str:
+            try:
+                last_update_date = datetime.datetime.strptime(last_update_str, "%Y-%m-%d %H:%M:%S").date()
+                today = datetime.date.today()
+                if last_update_date != today:
+                    logging.info("New day detected on startup. Resetting intraday straddle state while keeping settings.")
+                    state["current_rolls"] = 0
+                    state["realized_pnl"] = 0.0
+                    state["ce_ticker"] = None
+                    state["pe_ticker"] = None
+                    state["ce_entry_price"] = 0.0
+                    state["pe_entry_price"] = 0.0
+                    state["initial_spot"] = 0.0
+                    state["status_message"] = "New day initialized. Waiting for start time..."
+                    save_state(state)
+            except Exception as e:
+                logging.error(f"Error checking new day on startup: {e}")
     strategy.init_on_startup(kite, _monitor_loop, "straddle_monitor_thread")
 
 def _send_alert(msg):

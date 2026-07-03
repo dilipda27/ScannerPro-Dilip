@@ -16,7 +16,9 @@ def _safe_to_csv(df, filepath, max_retries=10, delay=0.1):
     import time
     for attempt in range(max_retries):
         try:
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            dirname = os.path.dirname(filepath)
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
             df.to_csv(filepath, index=False)
             return True
         except PermissionError:
@@ -29,7 +31,9 @@ def _safe_to_csv_append(df, filepath, max_retries=10, delay=0.1):
     import time
     for attempt in range(max_retries):
         try:
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            dirname = os.path.dirname(filepath)
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
             df.to_csv(filepath, mode='a', header=False, index=False)
             return True
         except PermissionError:
@@ -367,7 +371,7 @@ def clear_portfolio_by_strategy(strategy: str):
     df = get_portfolio()
     if not df.empty and 'Strategy' in df.columns:
         filtered_df = df[df['Strategy'] != strategy]
-        filtered__safe_to_csv(df, PORTFOLIO_FILE)
+        _safe_to_csv(filtered_df, PORTFOLIO_FILE)
         logging.info(f"🧹 Paper Portfolio Cleared for strategy: {strategy}")
     return True
 
@@ -782,7 +786,7 @@ def update_portfolio_pnl(kite):
                             "quantity": int(row['Qty'])
                         })
                     # Call basket margins API to get exact portfolio-netted/hedged margin
-                    res = kite.basket_margins(orders)
+                    res = kite.basket_order_margins(orders)
                     if res and "final" in res and "total" in res["final"]:
                         total_margin = float(res["final"]["total"])
                         # Distribute netted margin equally among active positions in the group
@@ -1084,6 +1088,89 @@ def update_swing_portfolio(kite):
         return open_trades
 
 
+def manual_exit_swing_trade(ticker: str, exit_price: float):
+    """
+    Manually exit an active swing trade, calculate P&L, 
+    add it to archived P&L (swing_trades_archived.csv), 
+    and clear it from the active position file (swing_trades.csv).
+    """
+    if not os.path.exists(SWING_FILE):
+        return False, "No swing trades file found."
+        
+    try:
+        with _trader_lock:
+            df = pd.read_csv(SWING_FILE)
+            if df.empty:
+                return False, "Swing portfolio is empty."
+                
+            # Find the active trade
+            mask = (df['Ticker'] == ticker) & (df['Status'] == 'OPEN')
+            if not mask.any():
+                return False, f"No active/open swing trade found for {ticker}."
+                
+            # Extract the trade row
+            trade_row = df[mask].copy().iloc[0]
+            
+            # Update fields
+            exit_price = round(float(exit_price), 2)
+            live_pnl = (exit_price - trade_row['EntryPrice']) * trade_row['Qty']
+            ret_pct = (live_pnl / (trade_row['EntryPrice'] * trade_row['Qty'])) * 100
+            
+            # Calculate charges
+            buy_val = trade_row['EntryPrice'] * trade_row['Qty']
+            sell_val = exit_price * trade_row['Qty']
+            turnover = buy_val + sell_val
+            stt = 0.001 * turnover
+            trans = 0.0000345 * turnover
+            gst = 0.18 * trans
+            sebi = (turnover / 10000000) * 10
+            stamp = 0.00015 * buy_val
+            est_charges = stt + trans + gst + sebi + stamp
+            net_pnl = live_pnl - est_charges
+            
+            # Create the closed trade dict
+            closed_trade = {
+                "Ticker": ticker,
+                "EntryPrice": trade_row['EntryPrice'],
+                "Target": trade_row['Target'],
+                "SL": trade_row['SL'],
+                "Qty": trade_row['Qty'],
+                "Token": trade_row.get('Token') if pd.notna(trade_row.get('Token')) else None,
+                "EntryDate": trade_row['EntryDate'],
+                "Status": "MANUAL EXIT",
+                "Current Price": exit_price,
+                "Live P&L": round(live_pnl, 2),
+                "Return %": round(ret_pct, 2),
+                "ExitDate": datetime.now().strftime("%Y-%m-%d"),
+                "Est. Charges": round(est_charges, 2),
+                "Net P&L": round(net_pnl, 2)
+            }
+            
+            # Load or create archive
+            if os.path.exists(SWING_ARCHIVE_FILE):
+                archive_df = pd.read_csv(SWING_ARCHIVE_FILE)
+                # Align columns
+                for col in closed_trade:
+                    if col not in archive_df.columns:
+                        archive_df[col] = None
+                archive_df = pd.concat([archive_df, pd.DataFrame([closed_trade])], ignore_index=True)
+            else:
+                archive_df = pd.DataFrame([closed_trade])
+                
+            _safe_to_csv(archive_df, SWING_ARCHIVE_FILE)
+            
+            # Remove from active swing file
+            df = df[~mask]
+            _safe_to_csv(df, SWING_FILE)
+            
+            logging.info(f"🚪 Manual Exit Executed: {ticker} @ {exit_price} (Net P&L: ₹{net_pnl:.2f})")
+            return True, f"Successfully exited {ticker} at ₹{exit_price:.2f}."
+            
+    except Exception as e:
+        logging.error(f"Error executing manual exit for {ticker}: {e}")
+        return False, f"Error: {e}"
+
+
 # ---------------------------------------------------------------------------
 # PAPER TRADING EQUITY CURVE CALCULATIONS (Separate Intraday & Swing)
 # ---------------------------------------------------------------------------
@@ -1278,7 +1365,7 @@ def get_swing_equity_curve(kite=None):
     return df_aggregated
 
 
-INTRADAY_PNL_LOG_FILE = "options_intraday_pnl_log.csv"
+INTRADAY_PNL_LOG_FILE = os.path.join("data", "trades", "options_intraday_pnl_log.csv")
 
 def log_intraday_pnl_snapshot(kite):
     """
@@ -1399,4 +1486,47 @@ def log_intraday_pnl_snapshot(kite):
         
     except Exception as e:
         logging.error(f"Error logging intraday P&L snapshot: {e}", exc_info=True)
+
+
+def force_clear_strategy_trades(strategy_name):
+    """Force close all active trades for a strategy in the portfolio without fetching LTP or placing trades."""
+    with _trader_lock:
+        df = get_portfolio()
+        if df.empty:
+            return
+        
+        mask = (df['Strategy'] == strategy_name) & (df['Status'] == 'Active')
+        if mask.any():
+            for idx, row in df[mask].iterrows():
+                trade = row.to_dict()
+                trade['ExitPrice'] = trade.get('Current Price', trade['EntryPrice'])
+                if pd.isnull(trade['ExitPrice']):
+                    trade['ExitPrice'] = trade['EntryPrice']
+                trade['ExitTime'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                trade['Capital Deployed'] = trade['EntryPrice'] * trade['Qty']
+                if "Bullish" in str(trade['Type']):
+                    trade['Final P&L'] = (trade['ExitPrice'] - trade['EntryPrice']) * trade['Qty']
+                else:
+                    trade['Final P&L'] = (trade['EntryPrice'] - trade['ExitPrice']) * trade['Qty']
+                trade['P&L %'] = (trade['Final P&L'] / trade['Capital Deployed']) * 100 if trade['Capital Deployed'] > 0 else 0
+                trade['Status'] = 'CLOSED'
+                
+                # Append to history
+                is_option = str(trade.get('Strategy', '')).lower() in ['option desk', 'rolling straddle'] or (any(str(trade.get('Ticker', '')).endswith(x) for x in ["CE", "PE"]) and any(c.isdigit() for c in str(trade.get('Ticker', ''))))
+                dest_file = OPTIONS_HISTORY_FILE if is_option else HISTORY_FILE
+                history_df = pd.DataFrame([trade])
+                if os.path.exists(dest_file):
+                    try:
+                        existing_history = pd.read_csv(dest_file)
+                        combined_history = pd.concat([existing_history, history_df], ignore_index=True, sort=False)
+                        _safe_to_csv(combined_history, dest_file)
+                    except Exception:
+                        _safe_to_csv(history_df, dest_file)
+                else:
+                    _safe_to_csv(history_df, dest_file)
+            
+            # Now mark them closed in the portfolio file
+            df.loc[mask, 'Status'] = 'Closed'
+            _safe_to_csv(df, PORTFOLIO_FILE)
+            logging.info(f"Force cleared active trades for strategy: {strategy_name}")
 

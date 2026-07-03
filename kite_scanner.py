@@ -15,6 +15,7 @@ from requests.adapters import HTTPAdapter
 _original_kite_init = KiteConnect.__init__
 def _patched_kite_init(self, *args, **kwargs):
     _original_kite_init(self, *args, **kwargs)
+    self.timeout = 15
     if hasattr(self, "reqsession"):
         adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100)
         self.reqsession.mount("https://", adapter)
