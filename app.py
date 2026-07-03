@@ -1403,78 +1403,78 @@ with tab_option_desk:
                                     
                                 trades_df, equity_df, stats = backtester.run_backtest(
                                     raw_df,
-                            strategy=bt_strat,
-                            capital=bt_capital,
-                            risk_pct=bt_risk,
-                            slippage_pct=bt_slippage,
-                            ticker=bt_ticker if bt_ticker.strip() != "" else None,
-                            progress_callback=update_bt_progress
-                        )
-                        
-                        progress_bar_bt.empty()
-                        status_text_bt.empty()
-                        
-                        st.success("✅ Backtest simulation completed successfully!")
-                        
-                        # Display Stats
-                        st.markdown("### 📊 Simulation Summary Statistics")
-                        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
-                        stat_col1.metric("Total Trades", f"{stats.get('Total Trades', 0)}")
-                        stat_col1.metric("Win Rate (%)", f"{stats.get('Win Rate', 0.0):.2f}%")
-                        stat_col2.metric("Total Profit (₹)", f"₹{stats.get('Total Profit', 0.0):,.2f}")
-                        stat_col2.metric("Max Drawdown (₹)", f"₹{stats.get('Max Drawdown', 0.0):,.2f}")
-                        stat_col3.metric("Profit Factor", f"{stats.get('Profit Factor', 0.0):.2f}" if stats.get('Profit Factor') != float('inf') else "∞")
-                        stat_col3.metric("Max Drawdown (%)", f"{stats.get('Max Drawdown %', 0.0):.2f}%")
-                        stat_col4.metric("Sharpe Ratio", f"{stats.get('Sharpe Ratio', 0.0):.2f}")
-                        
-                        # Plot Cumulative PnL / Equity Curve
-                        if not equity_df.empty:
-                            st.markdown("### 📈 Equity Curve")
-                            import plotly.graph_objects as go
-                            fig_bt = go.Figure()
-                            fig_bt.add_trace(go.Scatter(
-                                x=equity_df['ExitDateOnly'],
-                                y=equity_df['Equity'],
-                                mode='lines+markers',
-                                line=dict(color='#3b82f6', width=3),
-                                fill='tozeroy',
-                                fillcolor='rgba(59, 130, 246, 0.08)',
-                                name='Equity (₹)'
-                            ))
-                            fig_bt.update_layout(
-                                margin=dict(l=20, r=20, t=35, b=20),
-                                height=350,
-                                plot_bgcolor='rgba(0,0,0,0)',
-                                paper_bgcolor='rgba(0,0,0,0)',
-                                xaxis=dict(showgrid=True, gridcolor='#e2e8f0'),
-                                yaxis=dict(showgrid=True, gridcolor='#e2e8f0')
-                            )
-                            st.plotly_chart(fig_bt, use_container_width=True)
-                            
-                        # Show Detailed Trades table
-                        st.markdown("### 📜 Executed Transactions List")
-                        if not trades_df.empty:
-                            # Re-order columns for display
-                            cols_to_disp = [c for c in ['Ticker', 'Type', 'EntryTime', 'EntryPrice', 'Qty', 'SL', 'Target', 'ExitTime', 'ExitPrice', 'Status', 'PnL'] if c in trades_df.columns]
-                            st.dataframe(
-                                trades_df[cols_to_disp].style.format({
-                                    "EntryPrice": "₹{:.2f}",
-                                    "ExitPrice": "₹{:.2f}",
-                                    "SL": "₹{:.2f}",
-                                    "Target": "₹{:.2f}",
-                                    "PnL": "₹{:.2f}"
-                                }).map(style_pnl, subset=['PnL']),
-                                use_container_width=True
-                            )
-                        else:
-                            st.info("No trades were executed during this backtest timeframe.")
-                            
-                    except Exception as bt_err:
-                        st.error(f"Error executing backtest simulation: {bt_err}")
-                        import traceback
-                        st.code(traceback.format_exc())
-        else:
-            st.info("ℹ️ Please upload a historical CSV data file to begin.")
+                                    strategy=bt_strat,
+                                    capital=bt_capital,
+                                    risk_pct=bt_risk,
+                                    slippage_pct=bt_slippage,
+                                    ticker=bt_ticker if bt_ticker.strip() != "" else None,
+                                    progress_callback=update_bt_progress
+                                )
+                                
+                                progress_bar_bt.empty()
+                                status_text_bt.empty()
+                                
+                                st.success("✅ Backtest simulation completed successfully!")
+                                
+                                # Display Stats
+                                st.markdown("### 📊 Simulation Summary Statistics")
+                                stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+                                stat_col1.metric("Total Trades", f"{stats.get('Total Trades', 0)}")
+                                stat_col1.metric("Win Rate (%)", f"{stats.get('Win Rate', 0.0):.2f}%")
+                                stat_col2.metric("Total Profit (₹)", f"₹{stats.get('Total Profit', 0.0):,.2f}")
+                                stat_col2.metric("Max Drawdown (₹)", f"₹{stats.get('Max Drawdown', 0.0):,.2f}")
+                                stat_col3.metric("Profit Factor", f"{stats.get('Profit Factor', 0.0):.2f}" if stats.get('Profit Factor') != float('inf') else "∞")
+                                stat_col3.metric("Max Drawdown (%)", f"{stats.get('Max Drawdown %', 0.0):.2f}%")
+                                stat_col4.metric("Sharpe Ratio", f"{stats.get('Sharpe Ratio', 0.0):.2f}")
+                                
+                                # Plot Cumulative PnL / Equity Curve
+                                if not equity_df.empty:
+                                    st.markdown("### 📈 Equity Curve")
+                                    import plotly.graph_objects as go
+                                    fig_bt = go.Figure()
+                                    fig_bt.add_trace(go.Scatter(
+                                        x=equity_df['ExitDateOnly'],
+                                        y=equity_df['Equity'],
+                                        mode='lines+markers',
+                                        line=dict(color='#3b82f6', width=3),
+                                        fill='tozeroy',
+                                        fillcolor='rgba(59, 130, 246, 0.08)',
+                                        name='Equity (₹)'
+                                    ))
+                                    fig_bt.update_layout(
+                                        margin=dict(l=20, r=20, t=35, b=20),
+                                        height=350,
+                                        plot_bgcolor='rgba(0,0,0,0)',
+                                        paper_bgcolor='rgba(0,0,0,0)',
+                                        xaxis=dict(showgrid=True, gridcolor='#e2e8f0'),
+                                        yaxis=dict(showgrid=True, gridcolor='#e2e8f0')
+                                    )
+                                    st.plotly_chart(fig_bt, use_container_width=True)
+                                    
+                                # Show Detailed Trades table
+                                st.markdown("### 📜 Executed Transactions List")
+                                if not trades_df.empty:
+                                    # Re-order columns for display
+                                    cols_to_disp = [c for c in ['Ticker', 'Type', 'EntryTime', 'EntryPrice', 'Qty', 'SL', 'Target', 'ExitTime', 'ExitPrice', 'Status', 'PnL'] if c in trades_df.columns]
+                                    st.dataframe(
+                                        trades_df[cols_to_disp].style.format({
+                                            "EntryPrice": "₹{:.2f}",
+                                            "ExitPrice": "₹{:.2f}",
+                                            "SL": "₹{:.2f}",
+                                            "Target": "₹{:.2f}",
+                                            "PnL": "₹{:.2f}"
+                                        }).map(style_pnl, subset=['PnL']),
+                                        use_container_width=True
+                                    )
+                                else:
+                                    st.info("No trades were executed during this backtest timeframe.")
+                                    
+                        except Exception as bt_err:
+                            st.error(f"Error executing backtest simulation: {bt_err}")
+                            import traceback
+                            st.code(traceback.format_exc())
+            else:
+                st.info("ℹ️ Please upload a historical CSV data file to begin.")
         
         st.markdown("---")
 
