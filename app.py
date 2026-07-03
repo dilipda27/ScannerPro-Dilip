@@ -1341,23 +1341,68 @@ with tab_option_desk:
             bt_slippage = st.number_input("Slippage Per Trade (%)", value=0.05, step=0.01, format="%.3f", key="bt_slippage_input")
             
         if uploaded_file is not None:
-            if st.button("🚀 Run Backtest Simulation", type="primary", key="btn_run_backtest"):
-                with st.spinner("Processing historical data and running simulation..."):
-                    try:
-                        # Load dataframe
-                        raw_df = pd.read_csv(uploaded_file)
-                        
-                        # Add a callback to show progress in Streamlit
-                        progress_bar_bt = st.progress(0)
-                        status_text_bt = st.empty()
-                        
-                        def update_bt_progress(processed, total, day):
-                            pct = min(processed / total, 1.0)
-                            progress_bar_bt.progress(pct)
-                            status_text_bt.text(f"Processed: {day} ({processed}/{total})")
+            # Parse dates to show range selector
+            try:
+                # Read a quick sample or headers first
+                sample_df = pd.read_csv(uploaded_file, nrows=10)
+                # Find datetime column
+                dt_col = None
+                for col in sample_df.columns:
+                    if str(col).lower().strip() in ['datetime', 'date', 'time', 'timestamp']:
+                        dt_col = col
+                        break
+                
+                # Load full dataframe to parse date bounds
+                raw_df = pd.read_csv(uploaded_file)
+                if dt_col:
+                    raw_df[dt_col] = pd.to_datetime(raw_df[dt_col])
+                    min_date = raw_df[dt_col].min().date()
+                    max_date = raw_df[dt_col].max().date()
+                    
+                    st.markdown("#### 📅 Filter Backtest Timeframe")
+                    selected_range = st.date_input(
+                        "Select Backtest Date Range", 
+                        value=(min_date, max_date), 
+                        min_value=min_date, 
+                        max_value=max_date,
+                        key="bt_date_range"
+                    )
+                else:
+                    selected_range = None
+            except Exception as parse_err:
+                raw_df = None
+                selected_range = None
+                st.error(f"Error parsing date columns from CSV: {parse_err}")
+                
+            if raw_df is not None:
+                if st.button("🚀 Run Backtest Simulation", type="primary", key="btn_run_backtest"):
+                    with st.spinner("Processing historical data and running simulation..."):
+                        try:
+                            # Apply date range filtering if column and range exist
+                            if dt_col and selected_range:
+                                if isinstance(selected_range, (list, tuple)) and len(selected_range) == 2:
+                                    start_dt = pd.to_datetime(selected_range[0]).tz_localize(None)
+                                    end_dt = pd.to_datetime(selected_range[1]).tz_localize(None) + datetime.timedelta(days=1)
+                                    raw_df = raw_df[(raw_df[dt_col] >= start_dt) & (raw_df[dt_col] < end_dt)]
+                                elif isinstance(selected_range, datetime.date):
+                                    start_dt = pd.to_datetime(selected_range).tz_localize(None)
+                                    end_dt = start_dt + datetime.timedelta(days=1)
+                                    raw_df = raw_df[(raw_df[dt_col] >= start_dt) & (raw_df[dt_col] < end_dt)]
                             
-                        trades_df, equity_df, stats = backtester.run_backtest(
-                            raw_df,
+                            if raw_df.empty:
+                                st.error("The filtered date range contains no data. Please adjust your range.")
+                            else:
+                                # Add a callback to show progress in Streamlit
+                                progress_bar_bt = st.progress(0)
+                                status_text_bt = st.empty()
+                                
+                                def update_bt_progress(processed, total, day):
+                                    pct = min(processed / total, 1.0)
+                                    progress_bar_bt.progress(pct)
+                                    status_text_bt.text(f"Processed: {day} ({processed}/{total})")
+                                    
+                                trades_df, equity_df, stats = backtester.run_backtest(
+                                    raw_df,
                             strategy=bt_strat,
                             capital=bt_capital,
                             risk_pct=bt_risk,
