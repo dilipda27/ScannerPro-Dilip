@@ -1363,22 +1363,35 @@ with tab_option_desk:
                         max_date = raw_df[dt_col].max().date()
                         
                         st.markdown("#### 📅 Filter Backtest Timeframe")
-                        selected_range = st.date_input(
-                            "Select Backtest Date Range", 
-                            value=(min_date, max_date), 
-                            min_value=min_date, 
-                            max_value=max_date,
-                            key="bt_date_range"
-                        )
+                        col_date1, col_date2 = st.columns(2)
+                        with col_date1:
+                            bt_start_date = st.date_input(
+                                "Start Date", 
+                                value=min_date, 
+                                min_value=min_date, 
+                                max_value=max_date,
+                                key="bt_start_date_input"
+                            )
+                        with col_date2:
+                            bt_end_date = st.date_input(
+                                "End Date", 
+                                value=max_date, 
+                                min_value=min_date, 
+                                max_value=max_date,
+                                key="bt_end_date_input"
+                            )
                     else:
-                        selected_range = None
+                        bt_start_date = None
+                        bt_end_date = None
                         st.warning("⚠️ Date column was found but no dates could be parsed.")
                 else:
-                    selected_range = None
+                    bt_start_date = None
+                    bt_end_date = None
             except Exception as parse_err:
                 raw_df = None
                 dt_col = None
-                selected_range = None
+                bt_start_date = None
+                bt_end_date = None
                 st.error(f"Error parsing date columns from CSV: {parse_err}")
                 
             if raw_df is not None:
@@ -1386,15 +1399,10 @@ with tab_option_desk:
                     with st.spinner("Processing historical data and running simulation..."):
                         try:
                             # Apply date range filtering if column and range exist
-                            if dt_col and selected_range:
-                                if isinstance(selected_range, (list, tuple)) and len(selected_range) == 2:
-                                    start_dt = pd.to_datetime(selected_range[0]).tz_localize(None)
-                                    end_dt = pd.to_datetime(selected_range[1]).tz_localize(None) + datetime.timedelta(days=1)
-                                    raw_df = raw_df[(raw_df[dt_col] >= start_dt) & (raw_df[dt_col] < end_dt)]
-                                elif isinstance(selected_range, datetime.date):
-                                    start_dt = pd.to_datetime(selected_range).tz_localize(None)
-                                    end_dt = start_dt + datetime.timedelta(days=1)
-                                    raw_df = raw_df[(raw_df[dt_col] >= start_dt) & (raw_df[dt_col] < end_dt)]
+                            if dt_col and bt_start_date and bt_end_date:
+                                start_dt = pd.to_datetime(bt_start_date).tz_localize(None)
+                                end_dt = pd.to_datetime(bt_end_date).tz_localize(None) + datetime.timedelta(days=1)
+                                raw_df = raw_df[(raw_df[dt_col] >= start_dt) & (raw_df[dt_col] < end_dt)]
                             
                             if raw_df.empty:
                                 st.error("The filtered date range contains no data. Please adjust your range.")
