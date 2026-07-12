@@ -149,6 +149,15 @@ def get_portfolio():
 
 def execute_paper_trade(ticker, trade_type, entry_price, sl, qty, token=None, strategy="15-Min ORB", target=None, delta=None):
     with _trader_lock:
+        # Stop taking fresh intraday equity trades post 2:45 PM (14:45)
+        is_option = str(strategy).lower() in ['option desk', 'rolling straddle'] or \
+                    (any(str(ticker).endswith(x) for x in ["CE", "PE"]) and any(c.isdigit() for c in str(ticker)))
+        if not is_option:
+            now = datetime.now()
+            if now.hour > 14 or (now.hour == 14 and now.minute >= 45):
+                logging.info(f"🚫 Blocked fresh intraday equity trade for {ticker} post 2:45 PM ({now.strftime('%H:%M')})")
+                return False
+
         df = get_portfolio()
         
         # Check if already active in current session (avoid duplicate entries on same day)
@@ -422,7 +431,10 @@ def export_history_to_excel(excel_path="paper_trade_history.xlsx"):
                 except Exception as arc_err:
                     logging.warning(f"Could not read options permanent archive for excel export: {arc_err}")
                     
-        logging.info(f"📊 Exported paper trade tables to {excel_path}")
+        if isinstance(excel_path, str):
+            logging.info(f"📊 Exported paper trade tables to {excel_path}")
+        else:
+            logging.debug("📊 Exported paper trade tables to in-memory buffer")
         return True
     except Exception as e:
         logging.error(f"Error exporting to Excel: {e}")
@@ -659,8 +671,9 @@ def update_portfolio_pnl(kite):
                     current_sl = row['SL']
                     ltp = row['Current Price']
                     
-                    new_sl = apply_multi_stage_trailing_sl(row, ltp)
-                    if new_sl != current_sl:
+                    new_sl = round(float(apply_multi_stage_trailing_sl(row, ltp)), 2)
+                    current_sl_val = round(float(current_sl), 2)
+                    if new_sl != current_sl_val:
                         df.loc[(df['Ticker'] == row['Ticker']) & (df['Status'] == 'Active'), 'SL'] = new_sl
                         processed_df.at[idx, 'SL'] = new_sl
                         row['SL'] = new_sl # Update for the hit check below

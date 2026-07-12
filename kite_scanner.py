@@ -141,13 +141,27 @@ def get_nifty500_fno_symbols():
     final_symbols = nifty500_symbols.intersection(fno_symbols)
     return sorted(list(final_symbols))
 
+_instruments_cache = None
+_instruments_cache_lock = threading.Lock()
+
 def get_kite_instruments(kite, symbols):
     """
     Fetch all NSE instruments from Kite and filter out those that are in the symbols list.
+    Uses a global thread-safe cache to avoid repeating a massive 15MB download.
     Returns a dict mapping trading symbol to instrument_token.
     """
+    # Quick bypass for Nifty 50 lookup to avoid massive 15MB download during real-time scans
+    if len(symbols) == 1 and symbols[0] == "NIFTY 50":
+        return {"NIFTY 50": 256265}
+        
+    global _instruments_cache
     try:
-        instruments = kite.instruments("NSE")
+        with _instruments_cache_lock:
+            if _instruments_cache is None:
+                logging.info("Downloading NSE instruments list from Kite (this may take a few seconds)...")
+                _instruments_cache = kite.instruments("NSE")
+            instruments = _instruments_cache
+            
         df_instruments = pd.DataFrame(instruments)
         
         # Filter instruments for our required symbols
@@ -162,7 +176,7 @@ def get_kite_instruments(kite, symbols):
 
 CACHE_DIR = os.path.join("data", "cache", "kite_historical_cache")
 
-def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retries=5):
+def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retries=2):
     """
     Fetch historical data from Kite with rate limit handling and retry logic for network stability.
     Kite limit is typically 3 requests per second.

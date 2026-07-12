@@ -181,7 +181,7 @@ def fetch_stock_data(ticker, token, pdc, use_demo=False, kite=None):
             
     try:
         ticker_yf = ticker + ".NS"
-        df = yf.download(ticker_yf, period="5d", interval="5m", progress=False)
+        df = yf.download(ticker_yf, period="5d", interval="5m", progress=False, timeout=10)
         if not df.empty:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
@@ -343,7 +343,7 @@ def batch_pre_screen(cache_df):
     try:
         logging.info(f"⚡ Bulk Pre-Screen: Downloading current daily prices for {len(tickers)} tickers...")
         ticker_symbols = [t + ".NS" for t in tickers]
-        batch_df = yf.download(ticker_symbols, period="1d", progress=False)
+        batch_df = yf.download(ticker_symbols, period="1d", progress=False, timeout=10)
         
         if batch_df.empty:
             return cache_df

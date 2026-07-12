@@ -104,7 +104,7 @@ def generate_intraday_chart(df, ticker, scan_name, output_path="temp_chart.png",
                  volume=True,
                  tight_layout=True,
                  show_nontrading=False,
-                 datetime_format='%H:%M')
+                 datetime_format='%d-%b %H:%M')
                  
         return output_path
     except Exception as e:
@@ -117,14 +117,19 @@ def resample_to_15m(df_5m):
     if df_5m.empty:
         return df_5m
     
-    # Resample OHLC and sum Volume
+    # Prevent mutating the original dataframe
+    df_5m = df_5m.copy()
+    
+    # Ensure index is sorted chronologically
+    df_5m = df_5m.sort_index()
+    
     # Ensure index is datetime and localized to IST if not already
     if not isinstance(df_5m.index, pd.DatetimeIndex):
         df_5m.index = pd.to_datetime(df_5m.index)
     
-    # If it's UTC or naive, convert/localize to IST (Asia/Kolkata)
+    # If it's naive, localize directly to Asia/Kolkata (do not assume UTC and shift by +5.5 hrs!)
     if df_5m.index.tz is None:
-        df_5m.index = df_5m.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
+        df_5m.index = df_5m.index.tz_localize('Asia/Kolkata')
     else:
         df_5m.index = df_5m.index.tz_convert('Asia/Kolkata')
     

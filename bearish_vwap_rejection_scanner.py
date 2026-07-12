@@ -28,7 +28,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 def get_kite_client():
     """Initializes and returns Kite client if active session is available."""
     try:
-        if st.runtime.exists() and 'kite_access_token' in st.session_state:
+        from streamlit import runtime
+        if runtime.exists() and 'kite_access_token' in st.session_state:
             token = st.session_state.kite_access_token
             if token:
                 api_key = getattr(config, 'KITE_API_KEY', '')

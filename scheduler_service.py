@@ -23,6 +23,7 @@ import high52_scanner
 import bearish_vwap_rejection_scanner
 import telegram_agent
 import image_generator
+import paper_trader
 
 # Setup logging
 root_logger = logging.getLogger()
@@ -43,6 +44,17 @@ root_logger.addHandler(file_handler)
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
 root_logger.addHandler(stream_handler)
+
+def is_strategy_enabled(strategy_key):
+    settings_file = os.path.join("data", "state", ".scheduler_settings.json")
+    if not os.path.exists(settings_file):
+        return False
+    try:
+        with open(settings_file, "r") as f:
+            settings = json.load(f)
+            return settings.get(strategy_key, False)
+    except:
+        return False
 
 def get_kite_instance():
     """Helper to initialize Kite from saved session."""
@@ -70,6 +82,9 @@ def is_market_open():
     return market_start <= now <= market_end
 
 def run_automated_orb(scan_label):
+    if not is_strategy_enabled("orb"):
+        logging.info("Skipping Automated ORB Scan: Disabled in settings.")
+        return
     if datetime.datetime.today().weekday() > 4:
         logging.info(f"Skipping {scan_label}: Weekend.")
         return
@@ -132,6 +147,8 @@ def run_automated_orb(scan_label):
 
 def run_automated_52wh():
     """Run the 52-Week High Breakout scanner automated."""
+    if not is_strategy_enabled("high_52w"):
+        return
     if not is_market_open():
         return
 
@@ -141,7 +158,7 @@ def run_automated_52wh():
         return
 
     try:
-        results_df = high52_scanner.scan_52w_breakouts(kite, only_closed_candles=True)
+        results_df, _ = high52_scanner.scan_52w_breakouts(kite, only_closed_candles=True)
         
         # Check active portfolio and filter out existing tickers
         import paper_trader
@@ -164,6 +181,8 @@ def run_automated_52wh():
 
 def run_automated_bearish_vwap_rejection():
     """Run the Bearish VWAP Rejection scanner automated."""
+    if not is_strategy_enabled("vwap_rejection"):
+        return
     if not is_market_open():
         return
 
@@ -199,7 +218,6 @@ def run_automated_bearish_vwap_rejection():
         tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
         
         import kite_scanner
-        import paper_trader
         
         for _, row in new_df.iterrows():
             # Format and send signal with chart
@@ -257,6 +275,277 @@ def run_automated_bearish_vwap_rejection():
     except Exception as e:
         logging.error(f"Error during automated Bearish VWAP Rejection scan: {e}")
 
+def run_automated_bullish_vwap_rejection():
+    """Run the Bullish VWAP Rejection scanner automated."""
+    if not is_strategy_enabled("bullish_vwap_rejection"):
+        return
+    if not is_market_open():
+        return
+
+    logging.info("📡 Running Automated Bullish VWAP Rejection Scan...")
+    kite = get_kite_instance()
+    if not kite:
+        return
+
+    try:
+        import bullish_vwap_rejection_scanner
+        triggered_df, monitored_df = bullish_vwap_rejection_scanner.scan_bullish_vwap_rejections(kite)
+        if triggered_df.empty:
+            return
+
+        import notification_helper
+        new_tickers = notification_helper.filter_new_tickers("BULLISH_VWAP_REJECTION", triggered_df['Ticker'].tolist())
+        if not new_tickers:
+            return
+            
+        new_df = triggered_df[triggered_df['Ticker'].isin(new_tickers)]
+        portfolio_df = paper_trader.get_portfolio()
+        active_tickers = portfolio_df[portfolio_df['Status'] == 'Active']['Ticker'].tolist() if not portfolio_df.empty else []
+        new_df = new_df[~new_df['Ticker'].isin(active_tickers)]
+        
+        if new_df.empty:
+            return
+            
+        tel_token = config.TELEGRAM_BOT_TOKEN
+        tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
+        
+        import kite_scanner
+        for _, row in new_df.iterrows():
+            msg = (
+                f"📈 *Bullish VWAP Rejection Alert* 📈\n\n"
+                f"🎯 *Ticker*: {row['Ticker']}\n"
+                f"🟢 *Entry (Long)*: ₹{row['Price']}\n"
+                f"🛡️ *Stop Loss*: ₹{row['SL']}\n"
+                f"🟢 *Target 1 (1.5R)*: ₹{row['Target_1']}\n"
+                f"🟢 *Target 2 (3.0R)*: ₹{row['Target_2']}\n"
+                f"📊 *Pattern*: {row['Pattern']}\n"
+                f"🛡️ *Zone*: {row['Zone']} Rejection\n"
+                f"📈 *Risk/Reward*: {row['Risk_Reward']}\n"
+            )
+            try:
+                df_chart = kite_scanner.fetch_kite_data(kite, int(row['Token']), datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, tel_token, tel_chat_id, "Bullish VWAP Rejection", row_data=row)
+            except Exception as chart_err:
+                logging.error(f"Failed to fetch/send chart for {row['Ticker']}: {chart_err}")
+                telegram_agent.send_message(msg, tel_token, tel_chat_id)
+                
+            # Execute Paper Trade
+            try:
+                capital = 250000
+                qty = int(capital / row['Price'])
+                paper_trader.execute_paper_trade(
+                    ticker=row['Ticker'],
+                    trade_type="Bullish Pullback",
+                    entry_price=row['Price'],
+                    sl=row['SL'],
+                    qty=qty,
+                    token=int(row['Token']),
+                    strategy="Bullish VWAP Rejection"
+                )
+            except Exception as trade_err:
+                logging.error(f"Failed to execute auto-trade for {row['Ticker']}: {trade_err}")
+                
+        logging.info(f"💚 Found {len(new_df)} Bullish VWAP Rejections. Dispatched to Telegram & Auto-Traded.")
+        notification_helper.mark_as_notified("BULLISH_VWAP_REJECTION", new_df['Ticker'].tolist())
+        
+    except Exception as e:
+        logging.error(f"Error during automated Bullish VWAP Rejection scan: {e}")
+
+def run_automated_failed_breakouts():
+    """Run the Failed Breakout Short scanner automated."""
+    if not is_strategy_enabled("failed_breakout"):
+        return
+    if not is_market_open():
+        return
+
+    logging.info("📡 Running Automated Failed Breakout Scan...")
+    kite = get_kite_instance()
+    if not kite:
+        return
+
+    try:
+        import failed_breakout_scanner
+        res_failed = failed_breakout_scanner.scan_failed_breakouts(kite)
+        if res_failed.empty:
+            return
+            
+        triggered_failed = res_failed[res_failed['Status'] == 'Triggered']
+        if triggered_failed.empty:
+            return
+            
+        import notification_helper
+        new_tickers = notification_helper.filter_new_tickers("FAILED_BREAKOUT", triggered_failed['Ticker'].tolist())
+        if not new_tickers:
+            return
+            
+        new_fail = triggered_failed[triggered_failed['Ticker'].isin(new_tickers)]
+        portfolio_df = paper_trader.get_portfolio()
+        active_tickers = portfolio_df[portfolio_df['Status'] == 'Active']['Ticker'].tolist() if not portfolio_df.empty else []
+        new_fail = new_fail[~new_fail['Ticker'].isin(active_tickers)]
+        
+        if new_fail.empty:
+            return
+            
+        tel_token = config.TELEGRAM_BOT_TOKEN
+        tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
+        
+        import kite_scanner
+        for _, row in new_fail.iterrows():
+            msg = telegram_agent.format_signal_message(row, "Failed Breakout Short")
+            try:
+                df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, tel_token, tel_chat_id, "Failed Breakout Short", row_data=row)
+            except Exception as chart_err:
+                logging.error(f"Failed to send chart for {row['Ticker']}: {chart_err}")
+                telegram_agent.send_message(msg, tel_token, tel_chat_id)
+                
+            # Execute Paper Trade
+            paper_trader.execute_paper_trade(
+                ticker=row['Ticker'],
+                trade_type="Failed Breakout",
+                entry_price=float(row['Entry Price']),
+                sl=float(row['Stop Loss']),
+                qty=int(row['Qty']),
+                token=row.get('Token'),
+                strategy="Failed Breakout Short"
+            )
+            
+        notification_helper.mark_as_notified("FAILED_BREAKOUT", new_fail['Ticker'].tolist())
+        logging.info(f"🔴 Automated Failed Breakouts: Sent {len(new_fail)} signals to Telegram & executed trades.")
+        
+    except Exception as e:
+        logging.error(f"Error in automated Failed Breakouts: {e}")
+
+def run_automated_bullish_breakouts():
+    """Run the Bullish Breakout scanner automated."""
+    if not is_strategy_enabled("bullish"):
+        return
+    if not is_market_open():
+        return
+
+    logging.info("📡 Running Automated Bullish Breakout Scan...")
+    kite = get_kite_instance()
+    if not kite:
+        return
+
+    try:
+        import bullish_breakout_scanner
+        res_bull = bullish_breakout_scanner.scan_bullish_breakouts(kite)
+        if res_bull.empty:
+            return
+            
+        triggered_bull = res_bull[res_bull['Status'] == 'Triggered']
+        if triggered_bull.empty:
+            return
+            
+        import notification_helper
+        new_tickers = notification_helper.filter_new_tickers("BULLISH", triggered_bull['Ticker'].tolist())
+        if not new_tickers:
+            return
+            
+        new_bull = triggered_bull[triggered_bull['Ticker'].isin(new_tickers)]
+        portfolio_df = paper_trader.get_portfolio()
+        active_tickers = portfolio_df[portfolio_df['Status'] == 'Active']['Ticker'].tolist() if not portfolio_df.empty else []
+        new_bull = new_bull[~new_bull['Ticker'].isin(active_tickers)]
+        
+        if new_bull.empty:
+            return
+            
+        tel_token = config.TELEGRAM_BOT_TOKEN
+        tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
+        
+        import kite_scanner
+        for _, row in new_bull.iterrows():
+            msg = telegram_agent.format_signal_message(row, "Bullish Breakout")
+            try:
+                df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, tel_token, tel_chat_id, "Bullish Breakout", row_data=row)
+            except Exception as chart_err:
+                logging.error(f"Failed to send chart for {row['Ticker']}: {chart_err}")
+                telegram_agent.send_message(msg, tel_token, tel_chat_id)
+                
+            # Execute Paper Trade
+            paper_trader.execute_paper_trade(
+                ticker=row['Ticker'],
+                trade_type="Bullish Breakout",
+                entry_price=float(row['Entry Price']),
+                sl=float(row['Stop Loss']),
+                qty=int(row['Qty']),
+                token=row.get('Token'),
+                strategy="Bullish Breakout"
+            )
+            
+        notification_helper.mark_as_notified("BULLISH", new_bull['Ticker'].tolist())
+        logging.info(f"🟢 Automated Bullish Breakouts: Sent {len(new_bull)} signals to Telegram & executed trades.")
+        
+    except Exception as e:
+        logging.error(f"Error in automated Bullish Breakouts: {e}")
+
+def run_automated_bearish_breakdowns():
+    """Run the Bearish Breakdown scanner automated."""
+    if not is_strategy_enabled("bearish"):
+        return
+    if not is_market_open():
+        return
+
+    logging.info("📡 Running Automated Bearish Breakdown Scan...")
+    kite = get_kite_instance()
+    if not kite:
+        return
+
+    try:
+        import bearish_breakdown_scanner
+        res_bear = bearish_breakdown_scanner.scan_bearish_breakdowns(kite)
+        if res_bear.empty:
+            return
+            
+        triggered_bear = res_bear[res_bear['Status'] == 'Triggered']
+        if triggered_bear.empty:
+            return
+            
+        import notification_helper
+        new_tickers = notification_helper.filter_new_tickers("BEARISH", triggered_bear['Ticker'].tolist())
+        if not new_tickers:
+            return
+            
+        new_bear = triggered_bear[triggered_bear['Ticker'].isin(new_tickers)]
+        portfolio_df = paper_trader.get_portfolio()
+        active_tickers = portfolio_df[portfolio_df['Status'] == 'Active']['Ticker'].tolist() if not portfolio_df.empty else []
+        new_bear = new_bear[~new_bear['Ticker'].isin(active_tickers)]
+        
+        if new_bear.empty:
+            return
+            
+        tel_token = config.TELEGRAM_BOT_TOKEN
+        tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', config.TELEGRAM_CHAT_ID)
+        
+        import kite_scanner
+        for _, row in new_bear.iterrows():
+            msg = telegram_agent.format_signal_message(row, "Bearish Breakdown")
+            try:
+                df_chart = kite_scanner.fetch_kite_data(kite, row['Token'], datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now(), "5minute")
+                telegram_agent.send_signal_with_chart(row['Ticker'], msg, df_chart, tel_token, tel_chat_id, "Bearish Breakdown", row_data=row)
+            except Exception as chart_err:
+                logging.error(f"Failed to send chart for {row['Ticker']}: {chart_err}")
+                telegram_agent.send_message(msg, tel_token, tel_chat_id)
+                
+            # Execute Paper Trade
+            paper_trader.execute_paper_trade(
+                ticker=row['Ticker'],
+                trade_type="Bearish Breakdown",
+                entry_price=float(row['Entry Price']),
+                sl=float(row['Stop Loss']),
+                qty=int(row['Qty']),
+                token=row.get('Token'),
+                strategy="Bearish Breakdown"
+            )
+            
+        notification_helper.mark_as_notified("BEARISH", new_bear['Ticker'].tolist())
+        logging.info(f"🔴 Automated Bearish Breakdowns: Sent {len(new_bear)} signals to Telegram & executed trades.")
+        
+    except Exception as e:
+        logging.error(f"Error in automated Bearish Breakdowns: {e}")
+
 def run_morning_cache():
     """Pre-calculate data for both scanners and archive yesterday's history at 9:05 AM."""
     if datetime.datetime.today().weekday() > 4:
@@ -283,6 +572,8 @@ def run_morning_cache():
 
 def run_auto_square_off():
     """Square off all active intraday equity trades and option strategies at 3:20 PM."""
+    if not is_strategy_enabled("auto_square_off"):
+        return
     if datetime.datetime.today().weekday() > 4:
         return
 
@@ -345,6 +636,8 @@ def run_auto_square_off():
 
 def run_ai_position_advisor():
     """Periodically monitors active positions, asks Gemini AI for conviction recommendations, and sends them to Telegram."""
+    if not is_strategy_enabled("ai_advisor"):
+        return
     import ai_advisor
     if not ai_advisor.is_ai_advisor_enabled():
         return
@@ -664,15 +957,10 @@ def run_automated_315_swing():
         except Exception as report_err:
             logging.error(f"Failed to send daily swing report: {report_err}")
             
-        # 6. Stop the service process
-        logging.info("🚪 Terminating scheduler service process after swing execution.")
-        import os
-        os._exit(0)
+        logging.info("🏁 Completed automated 3:15 PM Swing Strategy execution.")
         
     except Exception as e:
         logging.error(f"Error in automated 3:15 PM Swing strategy: {e}")
-        import os
-        os._exit(0)
 
 # --- Scheduler Config ---
 # 9:05 AM IST - Morning Cache
@@ -693,6 +981,18 @@ schedule.every(5).minutes.do(run_automated_52wh)
 # Continuous Bearish VWAP Rejection Scan (Every 5 minutes between 9:45 and 14:45)
 schedule.every(5).minutes.do(run_automated_bearish_vwap_rejection)
 
+# Continuous Bullish VWAP Rejection Scan (Every 5 minutes between 9:45 and 14:45)
+schedule.every(5).minutes.do(run_automated_bullish_vwap_rejection)
+
+# Continuous Failed Breakout Scan (Every 5 minutes between 9:45 and 14:45)
+schedule.every(5).minutes.do(run_automated_failed_breakouts)
+
+# Continuous Bullish Breakout Scan (Every 5 minutes between 9:45 and 14:45)
+schedule.every(5).minutes.do(run_automated_bullish_breakouts)
+
+# Continuous Bearish Breakdown Scan (Every 5 minutes between 9:45 and 14:45)
+schedule.every(5).minutes.do(run_automated_bearish_breakdowns)
+
 # AI Advisor Active Positions monitor (Every 10 minutes between 9:45 AM and 2:45 PM)
 schedule.every(10).minutes.do(run_ai_position_advisor)
 
@@ -702,9 +1002,21 @@ schedule.every().day.at("15:20").do(run_auto_square_off)
 logging.info("🕰️ Scheduler Service Started. Monitoring slots, AI position analysis, and 3:20 PM Square-off...")
 
 if __name__ == "__main__":
-    while True:
-        try:
-            schedule.run_pending()
-        except Exception as e:
-            logging.error(f"Scheduler loop error: {e}")
-        time.sleep(30)
+    pid_file = os.path.join("data", "state", ".scheduler.pid")
+    os.makedirs(os.path.dirname(pid_file), exist_ok=True)
+    with open(pid_file, "w") as f:
+        f.write(str(os.getpid()))
+        
+    try:
+        while True:
+            try:
+                schedule.run_pending()
+            except Exception as e:
+                logging.error(f"Scheduler loop error: {e}")
+            time.sleep(30)
+    finally:
+        if os.path.exists(pid_file):
+            try:
+                os.remove(pid_file)
+            except:
+                pass
