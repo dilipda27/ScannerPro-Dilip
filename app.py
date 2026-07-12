@@ -279,7 +279,7 @@ def _cached_portfolio(access_token):
     return res
 
 with tab_option_desk:
-    if st.session_state.get("main_tabs", 0) == 3:
+    if st.session_state.get("main_tabs", "🔍 Scanners") == "📈 Option Desk":
         st.markdown("## 📈 Option Desk")
 
         if not st.session_state.get('kite_access_token'):
@@ -792,12 +792,12 @@ with tab_option_desk:
                 st.error(f"Could not load Options Bot state: {e}")
 
 with tab_analytics:
-    if st.session_state.get("main_tabs", 0) == 4:
+    if st.session_state.get("main_tabs", "🔍 Scanners") == "📊 Performance Analytics":
         import analytics_helper
         analytics_helper.render_analytics_tab()
 
 with tab_intraday:
-    if st.session_state.get("main_tabs", 0) == 1:
+    if st.session_state.get("main_tabs", "🔍 Scanners") == "💼 Intraday Paper Trades":
         st.markdown("## 📦 Live Paper Trading Portfolio")
         try:
             if not st.session_state.get('kite_access_token'):
@@ -1160,7 +1160,7 @@ def _cached_swing(access_token):
     return paper_trader.update_swing_portfolio(_kite)
 
 with tab_swing:
-    if st.session_state.get("main_tabs", 0) == 2:
+    if st.session_state.get("main_tabs", "🔍 Scanners") == "📊 Swing Trades":
         st.markdown("## 📊 Positional Swing Portfolio (3:15 PM)")
         try:
             if not st.session_state.get('kite_access_token'):
@@ -1366,7 +1366,7 @@ with tab_swing:
         st.markdown("---")
 
 with tab_backtest:
-    if st.session_state.get("main_tabs", 0) == 5:
+    if st.session_state.get("main_tabs", "🔍 Scanners") == "📉 Backtesting":
         st.markdown("## 📉 Historical Strategy Backtester")
         st.markdown("Upload historical CSV data (minute or daily candles) and run backtesting simulations to evaluate performance.")
 
@@ -2218,7 +2218,7 @@ if 'all_results' not in st.session_state:
 
 
 with tab_scanners:
-    if st.session_state.get("main_tabs", 0) == 0:
+    if st.session_state.get("main_tabs", "🔍 Scanners") == "🔍 Scanners":
         # Allow users to run scan
         if st.button(f"Run Scan: {strategy}", type="primary"):
             if strategy.endswith("(Kite)") and not st.session_state.kite_access_token:
