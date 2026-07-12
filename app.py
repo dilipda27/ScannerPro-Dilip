@@ -261,6 +261,8 @@ def show_help_dialog():
 tab_scanners, tab_intraday, tab_swing, tab_option_desk, tab_analytics, tab_backtest = st.tabs(["🔍 Scanners", "💼 Intraday Paper Trades", "📊 Swing Trades", "📈 Option Desk", "📊 Performance Analytics", "📉 Backtesting"], key="main_tabs")
 
 
+st.sidebar.text(f"Debug Active Tab: {st.session_state.get('main_tabs')}")
+
 # Cache expensive Kite LTP calls for 60 s to avoid repeated fetches on every widget interaction
 @st.cache_data(ttl=60, show_spinner=False)
 def _cached_portfolio(access_token):
