@@ -791,884 +791,1018 @@ with tab_option_desk:
             except Exception as e:
                 st.error(f"Could not load Options Bot state: {e}")
 
-    with tab_analytics:
-        if st.session_state.get("main_tabs", 0) == 4:
-            import analytics_helper
-            analytics_helper.render_analytics_tab()
+with tab_analytics:
+    if st.session_state.get("main_tabs", 0) == 4:
+        import analytics_helper
+        analytics_helper.render_analytics_tab()
 
-    with tab_intraday:
-        if st.session_state.get("main_tabs", 0) == 1:
-            st.markdown("## 📦 Live Paper Trading Portfolio")
-            try:
-                if not st.session_state.get('kite_access_token'):
-                    st.warning("🔒 Please authenticate with Kite Connect in the sidebar to access the Live Paper Trading Portfolio.")
-                    portfolio_df_all = pd.DataFrame()
+with tab_intraday:
+    if st.session_state.get("main_tabs", 0) == 1:
+        st.markdown("## 📦 Live Paper Trading Portfolio")
+        try:
+            if not st.session_state.get('kite_access_token'):
+                st.warning("🔒 Please authenticate with Kite Connect in the sidebar to access the Live Paper Trading Portfolio.")
+                portfolio_df_all = pd.DataFrame()
+            else:
+                portfolio_df_all = _cached_portfolio(st.session_state.kite_access_token)
+            portfolio_df = portfolio_df_all[~portfolio_df_all['Strategy'].isin(['Option Desk', 'Rolling Straddle'])].copy() if not portfolio_df_all.empty else pd.DataFrame()
+
+            # --- PERIODIC TELEGRAM UPDATES (Every 10 Minutes) ---
+            if 'last_telegram_update' not in st.session_state:
+                st.session_state.last_telegram_update = datetime.datetime.now() - datetime.timedelta(minutes=11)
+
+            if datetime.datetime.now() - st.session_state.last_telegram_update >= datetime.timedelta(minutes=10):
+                now = datetime.datetime.now()
+                current_time = now.time()
+                start_time = datetime.time(9, 30)
+                end_time = datetime.time(14, 45)
+
+                # Check if there's at least one active trade
+                has_open_positions = not portfolio_df.empty and (portfolio_df['Status'] == 'Active').any()
+
+                if start_time <= current_time <= end_time and has_open_positions:
+                    import telegram_agent
+                    tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
+                    # Prioritize personal private chat ID for P&L reports if configured
+                    tel_chat_id = getattr(config, 'TELEGRAM_PERSONAL_CHAT_ID', '') or getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', getattr(config, 'TELEGRAM_CHAT_ID', ''))
+
+                    if tel_token and tel_chat_id:
+                        if telegram_agent.send_portfolio_report(portfolio_df, tel_token, tel_chat_id):
+                            st.session_state.last_telegram_update = datetime.datetime.now()
+                            st.toast("📲 Sent periodic portfolio update to Telegram", icon="📊")
                 else:
-                    portfolio_df_all = _cached_portfolio(st.session_state.kite_access_token)
-                portfolio_df = portfolio_df_all[~portfolio_df_all['Strategy'].isin(['Option Desk', 'Rolling Straddle'])].copy() if not portfolio_df_all.empty else pd.DataFrame()
+                    # Reset the 10-minute timer if skipped to prevent redundant checks on every page interaction
+                    st.session_state.last_telegram_update = datetime.datetime.now()
 
-                # --- PERIODIC TELEGRAM UPDATES (Every 10 Minutes) ---
-                if 'last_telegram_update' not in st.session_state:
-                    st.session_state.last_telegram_update = datetime.datetime.now() - datetime.timedelta(minutes=11)
-
-                if datetime.datetime.now() - st.session_state.last_telegram_update >= datetime.timedelta(minutes=10):
-                    now = datetime.datetime.now()
-                    current_time = now.time()
-                    start_time = datetime.time(9, 30)
-                    end_time = datetime.time(14, 45)
-
-                    # Check if there's at least one active trade
-                    has_open_positions = not portfolio_df.empty and (portfolio_df['Status'] == 'Active').any()
-
-                    if start_time <= current_time <= end_time and has_open_positions:
-                        import telegram_agent
-                        tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
-                        # Prioritize personal private chat ID for P&L reports if configured
-                        tel_chat_id = getattr(config, 'TELEGRAM_PERSONAL_CHAT_ID', '') or getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', getattr(config, 'TELEGRAM_CHAT_ID', ''))
-
-                        if tel_token and tel_chat_id:
-                            if telegram_agent.send_portfolio_report(portfolio_df, tel_token, tel_chat_id):
-                                st.session_state.last_telegram_update = datetime.datetime.now()
-                                st.toast("📲 Sent periodic portfolio update to Telegram", icon="📊")
+            if not portfolio_df.empty:
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    # Calculate advanced metrics
+                    total_pnl = portfolio_df['Live P&L'].sum()
+                    if 'Margin Required' in portfolio_df.columns:
+                        total_capital = portfolio_df.apply(
+                            lambda r: r['Margin Required'] if r['Status'] == 'Active' else (r['EntryPrice'] * r['Qty']),
+                            axis=1
+                        ).sum()
                     else:
-                        # Reset the 10-minute timer if skipped to prevent redundant checks on every page interaction
-                        st.session_state.last_telegram_update = datetime.datetime.now()
+                        total_capital = (portfolio_df['EntryPrice'] * portfolio_df['Qty']).sum()
+                    pl_percent = (total_pnl / total_capital * 100) if total_capital > 0 else 0
+                    wins = (portfolio_df['Live P&L'] > 0).sum()
+                    losses = (portfolio_df['Live P&L'] <= 0).sum()
+                    win_ratio = f"{wins}W / {losses}L"
 
-                if not portfolio_df.empty:
-                    col1, col2 = st.columns([4, 1])
-                    with col1:
-                        # Calculate advanced metrics
-                        total_pnl = portfolio_df['Live P&L'].sum()
-                        if 'Margin Required' in portfolio_df.columns:
-                            total_capital = portfolio_df.apply(
-                                lambda r: r['Margin Required'] if r['Status'] == 'Active' else (r['EntryPrice'] * r['Qty']),
-                                axis=1
-                            ).sum()
-                        else:
-                            total_capital = (portfolio_df['EntryPrice'] * portfolio_df['Qty']).sum()
-                        pl_percent = (total_pnl / total_capital * 100) if total_capital > 0 else 0
-                        wins = (portfolio_df['Live P&L'] > 0).sum()
-                        losses = (portfolio_df['Live P&L'] <= 0).sum()
-                        win_ratio = f"{wins}W / {losses}L"
-
-                        # --- Custom Styled Metrics ---
-                        total_net_pnl = portfolio_df['Net P&L'].sum()
-                        total_charges = portfolio_df['Est. Charges'].sum()
-                        pnl_color = "#10b981" if total_net_pnl >= 0 else "#ef4444" # Vibrant Green/Red
-
-                        st.markdown(f"""
-                        <div style="display: flex; gap: 20px; margin-bottom: 25px;">
-                            <div style="flex: 1; background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; border-left: 6px solid {pnl_color}; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                                <div style="font-size: 0.85rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Net Live P&L</div>
-                                <div style="font-size: 1.5rem; font-weight: 700; color: {pnl_color}; margin: 5px 0;">₹{total_net_pnl:,.2f}</div>
-                                <div style="font-size: 0.75rem; color: #94a3b8;">Incl. Charges: ₹{total_charges:,.2f}</div>
-                            </div>
-                            <div style="flex: 1; background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; border-left: 6px solid #3b82f6; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                                <div style="font-size: 0.85rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Capital Deployed</div>
-                                <div style="font-size: 1.5rem; font-weight: 700; color: #1e293b; margin: 5px 0;">₹{total_capital:,.2f}</div>
-                                <div style="font-size: 0.75rem; color: #94a3b8;">Active Positions: {len(portfolio_df[portfolio_df['Status']=='Active'])}</div>
-                            </div>
-                            <div style="flex: 1; background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; border-left: 6px solid {pnl_color}; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                                <div style="font-size: 0.85rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Return Rate</div>
-                                <div style="font-size: 1.5rem; font-weight: 700; color: {pnl_color}; margin: 5px 0;">{(total_net_pnl/total_capital*100 if total_capital>0 else 0):.2f}%</div>
-                                <div style="font-size: 0.75rem; color: #94a3b8;">Win/Loss: {win_ratio}</div>
-                            </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                        # --- STRATEGY BREAKDOWN METRICS (HTML) ---
-                        strat_df = portfolio_df.groupby('Strategy').agg(
-                            Net_PL=('Net P&L', 'sum'),
-                            Charges=('Est. Charges', 'sum'),
-                            Capital=('EntryPrice', lambda x: (x * portfolio_df.loc[x.index, 'Qty']).sum()),
-                            Count=('Ticker', 'count')
-                        ).reset_index()
-
-                        cards_html = []
-                        for _, s_row in strat_df.iterrows():
-                            strat_name = s_row['Strategy']
-                            s_net_pl = s_row['Net_PL']
-                            s_charges = s_row['Charges']
-                            s_cap = s_row['Capital']
-                            s_count = s_row['Count']
-                            s_ret = (s_net_pl / s_cap * 100) if s_cap > 0 else 0
-
-                            s_color = "#10b981" if s_net_pl >= 0 else "#ef4444"
-
-                            card = f'<div style="flex: 1; min-width: 180px; background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; border-left: 5px solid {s_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">' \
-                                   f'<div style="font-size: 0.8rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;">🎯 {strat_name}</div>' \
-                                   f'<div style="font-size: 1.25rem; font-weight: 700; color: {s_color}; margin: 3px 0;">₹{s_net_pl:,.2f}</div>' \
-                                   f'<div style="font-size: 0.7rem; color: #94a3b8;">Pos: {s_count} | Ret: {s_ret:.2f}%</div>' \
-                                   f'</div>'
-                            cards_html.append(card)
-
-                        # Render strategies and intraday equity curve only if toggled
-                        show_intra_curve = st.toggle("📈 Show Today's Equity Curve", value=False, key="toggle_intra_curve")
-
-                        if show_intra_curve:
-                            col_strat, col_curve = st.columns([1, 1])
-                            with col_strat:
-                                st.markdown(f"""
-                                <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 25px;">
-                                    {"".join([c.replace('flex: 1; min-width: 180px;', 'width: 100%;') for c in cards_html])}
-                                </div>
-                                """, unsafe_allow_html=True)
-
-                            with col_curve:
-                                try:
-                                    _kite_curve = KiteConnect(api_key=getattr(config, 'KITE_API_KEY', ''))
-                                    _kite_curve.set_access_token(st.session_state.kite_access_token)
-                                    intra_curve = paper_trader.get_intraday_equity_curve(_kite_curve)
-
-                                    if not intra_curve.empty and len(intra_curve) > 1:
-                                        import plotly.graph_objects as go
-
-                                        fig = go.Figure()
-                                        fig.add_trace(go.Scatter(
-                                            x=intra_curve['Time'],
-                                            y=intra_curve['Cumulative P&L'],
-                                            mode='lines+markers',
-                                            line=dict(color='#3b82f6', width=3, shape='spline'),
-                                            marker=dict(size=6, color='#2563eb'),
-                                            fill='tozeroy',
-                                            fillcolor='rgba(59, 130, 246, 0.1)',
-                                            name='Intraday P&L',
-                                            text=intra_curve.apply(lambda r: f"Ticker: {r['Ticker']}<br>Trade P&L: ₹{r['P&L']:.2f}<br>Cumulative: ₹{r['Cumulative P&L']:.2f}", axis=1),
-                                            hoverinfo='text'
-                                        ))
-
-                                        fig.update_layout(
-                                            title=dict(text="📈 Today's Intraday Equity Curve", font=dict(size=14, color="#1e293b", weight="bold")),
-                                            margin=dict(l=20, r=20, t=35, b=20),
-                                            height=230,
-                                            plot_bgcolor='rgba(0,0,0,0)',
-                                            paper_bgcolor='rgba(0,0,0,0)',
-                                            xaxis=dict(
-                                                showgrid=True,
-                                                gridcolor='#e2e8f0',
-                                                tickfont=dict(color="#64748b", size=9)
-                                            ),
-                                            yaxis=dict(
-                                                showgrid=True,
-                                                gridcolor='#e2e8f0',
-                                                tickfont=dict(color="#64748b", size=9)
-                                            ),
-                                            hovermode="x unified"
-                                        )
-                                        st.plotly_chart(fig, width="stretch", config={'displayModeBar': False})
-                                    else:
-                                        st.info("Insufficient data for today's intraday equity curve.")
-                                except Exception as curve_err:
-                                    st.caption(f"Could not load intraday equity curve: {curve_err}")
-                        else:
-                            # Render strategy cards horizontally when chart is hidden
-                            st.markdown(f"""
-                            <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 25px;">
-                                {"".join(cards_html)}
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                        if st.button("🔄 Refresh Live P&L", width="content"):
-                            st.rerun()
-
-
-                        # Generate Chart Links for Active Trades
-                        # Generate Chart Links for Active Trades
-                        if not portfolio_df.empty:
-                            def make_chart_link(row):
-                                if 'Token' in row and pd.notna(row['Token']) and row['Status'] == 'Active':
-                                    return f"https://kite.zerodha.com/markets/ext/chart/web/ciq/NSE/{row['Ticker']}/{int(row['Token'])}"
-                                return None
-                            portfolio_df['Chart'] = portfolio_df.apply(make_chart_link, axis=1)
-
-                        styled_df = portfolio_df.style.format({
-                            "Live P&L": "₹{:.2f}", 
-                            "EntryPrice": "₹{:.2f}", 
-                            "Current Price": "₹{:.2f}",
-                            "SL": "₹{:.2f}",
-                            "Est. Charges": "₹{:.2f}",
-                            "Net P&L": "₹{:.2f}"
-                        }).map(style_pnl, subset=['Live P&L', 'Net P&L'])\
-                          .map(style_status, subset=['SL Status'])
-
-                        # Column Ordering: Ticker, Chart, then others
-                        cols = list(portfolio_df.columns)
-                        if 'Chart' in cols:
-                            cols.remove('Chart')
-                            cols.insert(1, 'Chart')
-                        display_cols = [c for c in cols if c != 'Token']
-
-                        st.dataframe(
-                            styled_df, 
-                            width='stretch',
-                            column_config={
-                                "Chart": st.column_config.LinkColumn("Chart 📈", display_text="View Chart")
-                            },
-                            column_order=display_cols
-                        )
-
-                    with col2:
-                        with st.expander("🛠️ Manage", expanded=False):
-                            st.subheader("Exit Trades")
-                            tickers_to_exit = st.multiselect("Tickers", portfolio_df['Ticker'].tolist())
-                            if st.button("🚪 Exit"):
-                                if tickers_to_exit:
-                                    count = 0
-                                    # Build a fresh kite object for mutation operations (not cached)
-                                    _kite_exit = KiteConnect(api_key=getattr(config, 'KITE_API_KEY', ''))
-                                    _kite_exit.set_access_token(st.session_state.kite_access_token)
-                                    for ticker in tickers_to_exit:
-                                        if paper_trader.exit_trade(ticker, _kite_exit):
-                                            count += 1
-                                    st.cache_data.clear()  # Force portfolio refresh after mutation
-                                    st.success(f"Closed {count} trades.")
-                                    st.rerun()
-                                else:
-                                    st.warning("Select tickers.")
-
-                            if st.button("🚪 Exit All Active Trades", type="primary", width="stretch"):
-                                # Build a fresh kite object for mutation operations
-                                _kite_exit = KiteConnect(api_key=getattr(config, 'KITE_API_KEY', ''))
-                                _kite_exit.set_access_token(st.session_state.kite_access_token)
-
-                                # Exit only the active equity positions (excluding Option Desk and Rolling Straddle)
-                                active_equity = portfolio_df[portfolio_df['Status'] == 'Active']
-                                count = 0
-                                for _, row in active_equity.iterrows():
-                                    if paper_trader.exit_trade(row['Ticker'], _kite_exit):
-                                        count += 1
-                                paper_trader.export_history_to_excel()
-                                st.cache_data.clear() # Force portfolio refresh
-                                if count > 0:
-                                    st.success(f"Closed all {count} active equity trades and archived to Excel.")
-                                else:
-                                    st.info("No active equity trades to close.")
-                                st.rerun()
-
-                            st.markdown("---")
-                            st.subheader("🧹 Clear Trades")
-
-                            strategies_in_portfolio = portfolio_df['Strategy'].unique().tolist() if 'Strategy' in portfolio_df.columns and not portfolio_df.empty else []
-                            if strategies_in_portfolio:
-                                strategy_to_clear = st.selectbox("Select Strategy to Clear:", strategies_in_portfolio)
-                                if st.button(f"🧹 Clear '{strategy_to_clear}' Trades", width="stretch"):
-                                    paper_trader.clear_portfolio_by_strategy(strategy_to_clear)
-                                    st.cache_data.clear()
-                                    st.success(f"Cleared {strategy_to_clear}!")
-                                    st.rerun()
-
-                            st.markdown("<br>", unsafe_allow_html=True)
-                            if st.button("🚨 Clear Entire Portfolio", type="secondary"):
-                                # Clear only equity trades from the portfolio file to leave Option Desk / Rolling Straddle untouched
-                                for strat in strategies_in_portfolio:
-                                    paper_trader.clear_portfolio_by_strategy(strat)
-                                st.cache_data.clear()
-                                st.success("Cleared All Intraday Equity Trades!")
-                                st.rerun()
-
-                else:
-                    st.info("No open paper trades. Run an ORB scan to find opportunities!")
-
-                # --- TRADE HISTORY (Always Visible) ---
-                st.markdown("---")
-                st.subheader("📜 Paper Trade History")
-                history_df = paper_trader.get_history()
-                if not history_df.empty:
-                    if 'Strategy' not in history_df.columns:
-                        history_df['Strategy'] = "15-Min ORB"
-
-                    # Summary Stats
-                    total_realized_pnl = history_df['Final P&L'].sum()
-                    total_capital = history_df['Capital Deployed'].sum()
-                    overall_perf = (total_realized_pnl / total_capital * 100) if total_capital > 0 else 0
-
-                    h_col1, h_col2, h_col3 = st.columns(3)
-                    h_col1.metric("Total Realized P&L", f"₹{total_realized_pnl:,.2f}")
-                    h_col2.metric("Total Capital Deployed", f"₹{total_capital:,.2f}")
-                    h_col3.metric("Overall Performance", f"{overall_perf:,.2f}%")
-
-                    # --- STRATEGY-WISE REALIZED P&L BREAKDOWN ---
-                    st.markdown("##### 🏁 Realized Performance by Strategy")
-                    hist_strat = history_df.groupby('Strategy').agg(
-                        Realized_PL=('Final P&L', 'sum'),
-                        Capital=('Capital Deployed', 'sum'),
-                        Trades=('Ticker', 'count')
-                    ).reset_index()
-
-                    h_cards_html = []
-                    for _, hs_row in hist_strat.iterrows():
-                        h_strat_name = hs_row['Strategy']
-                        hs_pl = hs_row['Realized_PL']
-                        hs_cap = hs_row['Capital']
-                        hs_trades = hs_row['Trades']
-                        hs_ret = (hs_pl / hs_cap * 100) if hs_cap > 0 else 0
-
-                        hs_color = "#10b981" if hs_pl >= 0 else "#ef4444"
-
-                        card = f'<div style="flex: 1; min-width: 180px; background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; border-left: 5px solid {hs_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">' \
-                               f'<div style="font-size: 0.8rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;">🏁 {h_strat_name}</div>' \
-                               f'<div style="font-size: 1.25rem; font-weight: 700; color: {hs_color}; margin: 3px 0;">₹{hs_pl:,.2f}</div>' \
-                               f'<div style="font-size: 0.7rem; color: #94a3b8;">Trades: {hs_trades} | Return: {hs_ret:.2f}%</div>' \
-                               f'</div>'
-                        h_cards_html.append(card)
+                    # --- Custom Styled Metrics ---
+                    total_net_pnl = portfolio_df['Net P&L'].sum()
+                    total_charges = portfolio_df['Est. Charges'].sum()
+                    pnl_color = "#10b981" if total_net_pnl >= 0 else "#ef4444" # Vibrant Green/Red
 
                     st.markdown(f"""
-                    <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 25px;">
-                        {"".join(h_cards_html)}
+                    <div style="display: flex; gap: 20px; margin-bottom: 25px;">
+                        <div style="flex: 1; background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; border-left: 6px solid {pnl_color}; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                            <div style="font-size: 0.85rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Net Live P&L</div>
+                            <div style="font-size: 1.5rem; font-weight: 700; color: {pnl_color}; margin: 5px 0;">₹{total_net_pnl:,.2f}</div>
+                            <div style="font-size: 0.75rem; color: #94a3b8;">Incl. Charges: ₹{total_charges:,.2f}</div>
+                        </div>
+                        <div style="flex: 1; background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; border-left: 6px solid #3b82f6; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                            <div style="font-size: 0.85rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Capital Deployed</div>
+                            <div style="font-size: 1.5rem; font-weight: 700; color: #1e293b; margin: 5px 0;">₹{total_capital:,.2f}</div>
+                            <div style="font-size: 0.75rem; color: #94a3b8;">Active Positions: {len(portfolio_df[portfolio_df['Status']=='Active'])}</div>
+                        </div>
+                        <div style="flex: 1; background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; border-left: 6px solid {pnl_color}; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                            <div style="font-size: 0.85rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Return Rate</div>
+                            <div style="font-size: 1.5rem; font-weight: 700; color: {pnl_color}; margin: 5px 0;">{(total_net_pnl/total_capital*100 if total_capital>0 else 0):.2f}%</div>
+                            <div style="font-size: 0.75rem; color: #94a3b8;">Win/Loss: {win_ratio}</div>
+                        </div>
                     </div>
                     """, unsafe_allow_html=True)
 
-                    st.dataframe(history_df.style.format({
-                        "EntryPrice": "₹{:.2f}",
-                        "ExitPrice": "₹{:.2f}",
-                        "Capital Deployed": "₹{:.2f}",
-                        "Final P&L": "₹{:.2f}",
-                        "P&L %": "{:.2f}%"
-                    }), width='stretch')
+                    # --- STRATEGY BREAKDOWN METRICS (HTML) ---
+                    strat_df = portfolio_df.groupby('Strategy').agg(
+                        Net_PL=('Net P&L', 'sum'),
+                        Charges=('Est. Charges', 'sum'),
+                        Capital=('EntryPrice', lambda x: (x * portfolio_df.loc[x.index, 'Qty']).sum()),
+                        Count=('Ticker', 'count')
+                    ).reset_index()
 
-                    col_export, col_clear = st.columns(2)
-                    with col_export:
-                        import io
-                        buffer = io.BytesIO()
-                        paper_trader.export_history_to_excel(buffer)
-                        buffer.seek(0)
-                        st.download_button(
-                            label="📥 Export Trade History to Excel",
-                            data=buffer,
-                            file_name="paper_trade_history.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            width="stretch"
-                        )
-                    with col_clear:
-                        if st.button("🗑️ Archive & Clear History", width="stretch"):
-                            paper_trader.archive_history()
-                            # Regenerate Excel file to include archived records
-                            paper_trader.export_history_to_excel()
-                            st.success("History archived to permanent records and cleared!")
-                            st.rerun()
-                else:
-                    st.info("No closed trades in history yet.")
-            except Exception as e:
-                st.warning(f"Portfolio update paused: {e}")
+                    cards_html = []
+                    for _, s_row in strat_df.iterrows():
+                        strat_name = s_row['Strategy']
+                        s_net_pl = s_row['Net_PL']
+                        s_charges = s_row['Charges']
+                        s_cap = s_row['Capital']
+                        s_count = s_row['Count']
+                        s_ret = (s_net_pl / s_cap * 100) if s_cap > 0 else 0
 
+                        s_color = "#10b981" if s_net_pl >= 0 else "#ef4444"
 
-        # Cache expensive Kite LTP calls for 60 s to avoid repeated fetches on every widget interaction
-        @st.cache_data(ttl=60, show_spinner=False)
-        def _cached_swing(access_token):
-            _kite = KiteConnect(api_key=getattr(config, 'KITE_API_KEY', ''))
-            _kite.set_access_token(access_token)
-            return paper_trader.update_swing_portfolio(_kite)
+                        card = f'<div style="flex: 1; min-width: 180px; background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; border-left: 5px solid {s_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">' \
+                               f'<div style="font-size: 0.8rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;">🎯 {strat_name}</div>' \
+                               f'<div style="font-size: 1.25rem; font-weight: 700; color: {s_color}; margin: 3px 0;">₹{s_net_pl:,.2f}</div>' \
+                               f'<div style="font-size: 0.7rem; color: #94a3b8;">Pos: {s_count} | Ret: {s_ret:.2f}%</div>' \
+                               f'</div>'
+                        cards_html.append(card)
 
-    with tab_swing:
-        if st.session_state.get("main_tabs", 0) == 2:
-            st.markdown("## 📊 Positional Swing Portfolio (3:15 PM)")
-            try:
-                if not st.session_state.get('kite_access_token'):
-                    st.warning("🔒 Please authenticate with Kite Connect in the sidebar to access the Swing Portfolio.")
-                    full_swing_df = pd.DataFrame()
-                else:
-                    full_swing_df = _cached_swing(st.session_state.kite_access_token)
+                    # Render strategies and intraday equity curve only if toggled
+                    show_intra_curve = st.toggle("📈 Show Today's Equity Curve", value=False, key="toggle_intra_curve")
 
-                # --- SWING LIFETIME PERSISTENT EQUITY CURVE ---
-                show_swing_curve = st.toggle("📊 Show Lifetime Swing Equity Curve", value=False, key="toggle_swing_curve")
-                if show_swing_curve:
-                    try:
-                        _kite_swing = KiteConnect(api_key=getattr(config, 'KITE_API_KEY', ''))
-                        _kite_swing.set_access_token(st.session_state.kite_access_token)
-                        swing_curve = paper_trader.get_swing_equity_curve(_kite_swing)
+                    if show_intra_curve:
+                        col_strat, col_curve = st.columns([1, 1])
+                        with col_strat:
+                            st.markdown(f"""
+                            <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 25px;">
+                                {"".join([c.replace('flex: 1; min-width: 180px;', 'width: 100%;') for c in cards_html])}
+                            </div>
+                            """, unsafe_allow_html=True)
 
-                        if not swing_curve.empty and len(swing_curve) > 1:
-                            import plotly.graph_objects as go
+                        with col_curve:
+                            try:
+                                _kite_curve = KiteConnect(api_key=getattr(config, 'KITE_API_KEY', ''))
+                                _kite_curve.set_access_token(st.session_state.kite_access_token)
+                                intra_curve = paper_trader.get_intraday_equity_curve(_kite_curve)
 
-                            fig_swing = go.Figure()
-                            fig_swing.add_trace(go.Scatter(
-                                x=swing_curve['Date'],
-                                y=swing_curve['Cumulative P&L'],
-                                mode='lines+markers',
-                                line=dict(color='#10b981', width=3, shape='spline'),
-                                marker=dict(size=6, color='#059669'),
-                                fill='tozeroy',
-                                fillcolor='rgba(16, 185, 129, 0.08)',
-                                name='Swing Lifetime P&L',
-                                text=swing_curve.apply(lambda r: f"Date: {r['Date']}<br>Realized Net: ₹{r['P&L']:.2f}<br>Cumulative: ₹{r['Cumulative P&L']:.2f}<br>Tickers: {r['Ticker']}", axis=1),
-                                hoverinfo='text'
-                            ))
+                                if not intra_curve.empty and len(intra_curve) > 1:
+                                    import plotly.graph_objects as go
 
-                            fig_swing.update_layout(
-                                title=dict(text="📈 Lifetime Swing Equity Curve (Persistent)", font=dict(size=14, color="#1e293b", weight="bold")),
-                                margin=dict(l=20, r=20, t=35, b=20),
-                                height=250,
-                                plot_bgcolor='rgba(0,0,0,0)',
-                                paper_bgcolor='rgba(0,0,0,0)',
-                                xaxis=dict(
-                                    showgrid=True,
-                                    gridcolor='#e2e8f0',
-                                    tickfont=dict(color="#64748b", size=9)
-                                ),
-                                yaxis=dict(
-                                    showgrid=True,
-                                    gridcolor='#e2e8f0',
-                                    tickfont=dict(color="#64748b", size=9)
-                                ),
-                                hovermode="x unified"
-                            )
-                            st.plotly_chart(fig_swing, width="stretch", config={'displayModeBar': False})
-                        else:
-                            st.info("Insufficient data for lifetime swing equity curve.")
-                    except Exception as swing_curve_err:
-                        st.caption(f"Could not load swing equity curve: {swing_curve_err}")
+                                    fig = go.Figure()
+                                    fig.add_trace(go.Scatter(
+                                        x=intra_curve['Time'],
+                                        y=intra_curve['Cumulative P&L'],
+                                        mode='lines+markers',
+                                        line=dict(color='#3b82f6', width=3, shape='spline'),
+                                        marker=dict(size=6, color='#2563eb'),
+                                        fill='tozeroy',
+                                        fillcolor='rgba(59, 130, 246, 0.1)',
+                                        name='Intraday P&L',
+                                        text=intra_curve.apply(lambda r: f"Ticker: {r['Ticker']}<br>Trade P&L: ₹{r['P&L']:.2f}<br>Cumulative: ₹{r['Cumulative P&L']:.2f}", axis=1),
+                                        hoverinfo='text'
+                                    ))
 
-                if not full_swing_df.empty:
-                    # Split into Active and Closed
-                    active_swing = full_swing_df[full_swing_df['Status'] == 'OPEN'].copy()
-                    # Status could be 'SL HIT' or 'TARGET HIT'
-                    closed_swing = full_swing_df[full_swing_df['Status'].str.contains('HIT', na=False)].copy()
-
-                    # Calculate Swing Summary Metrics (Only for Active)
-                    if not active_swing.empty:
-                        s_total_investment = (active_swing['EntryPrice'] * active_swing['Qty']).sum()
-                        s_current_value = (active_swing['Current Price'] * active_swing['Qty']).sum()
-                        s_day_pnl = active_swing['Day P&L'].sum()
-                        s_total_pnl = active_swing['Live P&L'].sum()
-                        s_pnl_pct = (s_total_pnl / s_total_investment * 100) if s_total_investment > 0 else 0
-
-                        s_pnl_color = "#28a745" if s_total_pnl >= 0 else "#dc3545"
-                        s_day_color = "#28a745" if s_day_pnl >= 0 else "#dc3545"
-
-                        # Premium Summary Bar for Swing
+                                    fig.update_layout(
+                                        title=dict(text="📈 Today's Intraday Equity Curve", font=dict(size=14, color="#1e293b", weight="bold")),
+                                        margin=dict(l=20, r=20, t=35, b=20),
+                                        height=230,
+                                        plot_bgcolor='rgba(0,0,0,0)',
+                                        paper_bgcolor='rgba(0,0,0,0)',
+                                        xaxis=dict(
+                                            showgrid=True,
+                                            gridcolor='#e2e8f0',
+                                            tickfont=dict(color="#64748b", size=9)
+                                        ),
+                                        yaxis=dict(
+                                            showgrid=True,
+                                            gridcolor='#e2e8f0',
+                                            tickfont=dict(color="#64748b", size=9)
+                                        ),
+                                        hovermode="x unified"
+                                    )
+                                    st.plotly_chart(fig, width="stretch", config={'displayModeBar': False})
+                                else:
+                                    st.info("Insufficient data for today's intraday equity curve.")
+                            except Exception as curve_err:
+                                st.caption(f"Could not load intraday equity curve: {curve_err}")
+                    else:
+                        # Render strategy cards horizontally when chart is hidden
                         st.markdown(f"""
-                        <div style="display: flex; justify-content: space-between; align-items: center; background-color: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid {s_pnl_color}; margin-bottom: 20px;">
-                            <div style="flex: 1; text-align: center;">
-                                <div style="font-size: 0.8rem; color: #6c757d; text-transform: uppercase;">Active Investment</div>
-                                <div style="font-size: 1.1rem; font-weight: bold; color: #212529;">₹{s_total_investment:,.2f}</div>
-                            </div>
-                            <div style="flex: 1; text-align: center; border-left: 1px solid #dee2e6;">
-                                <div style="font-size: 0.8rem; color: #6c757d; text-transform: uppercase;">Current Value</div>
-                                <div style="font-size: 1.1rem; font-weight: bold; color: #212529;">₹{s_current_value:,.2f}</div>
-                            </div>
-                            <div style="flex: 1; text-align: center; border-left: 1px solid #dee2e6;">
-                                <div style="font-size: 0.8rem; color: #6c757d; text-transform: uppercase;">Active Day's P&L</div>
-                                <div style="font-size: 1.1rem; font-weight: bold; color: {s_day_color};">₹{s_day_pnl:,.2f}</div>
-                            </div>
-                            <div style="flex: 1; text-align: center; border-left: 1px solid #dee2e6;">
-                                <div style="font-size: 0.8rem; color: #6c757d; text-transform: uppercase;">Total Active P&L</div>
-                                <div style="font-size: 1.1rem; font-weight: bold; color: {s_pnl_color};">₹{s_total_pnl:,.2f} ({s_pnl_pct:.2f}%)</div>
+                        <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 25px;">
+                            {"".join(cards_html)}
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    if st.button("🔄 Refresh Live P&L", width="content"):
+                        st.rerun()
+
+
+                    # Generate Chart Links for Active Trades
+                    # Generate Chart Links for Active Trades
+                    if not portfolio_df.empty:
+                        def make_chart_link(row):
+                            if 'Token' in row and pd.notna(row['Token']) and row['Status'] == 'Active':
+                                return f"https://kite.zerodha.com/markets/ext/chart/web/ciq/NSE/{row['Ticker']}/{int(row['Token'])}"
+                            return None
+                        portfolio_df['Chart'] = portfolio_df.apply(make_chart_link, axis=1)
+
+                    styled_df = portfolio_df.style.format({
+                        "Live P&L": "₹{:.2f}", 
+                        "EntryPrice": "₹{:.2f}", 
+                        "Current Price": "₹{:.2f}",
+                        "SL": "₹{:.2f}",
+                        "Est. Charges": "₹{:.2f}",
+                        "Net P&L": "₹{:.2f}"
+                    }).map(style_pnl, subset=['Live P&L', 'Net P&L'])\
+                      .map(style_status, subset=['SL Status'])
+
+                    # Column Ordering: Ticker, Chart, then others
+                    cols = list(portfolio_df.columns)
+                    if 'Chart' in cols:
+                        cols.remove('Chart')
+                        cols.insert(1, 'Chart')
+                    display_cols = [c for c in cols if c != 'Token']
+
+                    st.dataframe(
+                        styled_df, 
+                        width='stretch',
+                        column_config={
+                            "Chart": st.column_config.LinkColumn("Chart 📈", display_text="View Chart")
+                        },
+                        column_order=display_cols
+                    )
+
+                with col2:
+                    with st.expander("🛠️ Manage", expanded=False):
+                        st.subheader("Exit Trades")
+                        tickers_to_exit = st.multiselect("Tickers", portfolio_df['Ticker'].tolist())
+                        if st.button("🚪 Exit"):
+                            if tickers_to_exit:
+                                count = 0
+                                # Build a fresh kite object for mutation operations (not cached)
+                                _kite_exit = KiteConnect(api_key=getattr(config, 'KITE_API_KEY', ''))
+                                _kite_exit.set_access_token(st.session_state.kite_access_token)
+                                for ticker in tickers_to_exit:
+                                    if paper_trader.exit_trade(ticker, _kite_exit):
+                                        count += 1
+                                st.cache_data.clear()  # Force portfolio refresh after mutation
+                                st.success(f"Closed {count} trades.")
+                                st.rerun()
+                            else:
+                                st.warning("Select tickers.")
+
+                        if st.button("🚪 Exit All Active Trades", type="primary", width="stretch"):
+                            # Build a fresh kite object for mutation operations
+                            _kite_exit = KiteConnect(api_key=getattr(config, 'KITE_API_KEY', ''))
+                            _kite_exit.set_access_token(st.session_state.kite_access_token)
+
+                            # Exit only the active equity positions (excluding Option Desk and Rolling Straddle)
+                            active_equity = portfolio_df[portfolio_df['Status'] == 'Active']
+                            count = 0
+                            for _, row in active_equity.iterrows():
+                                if paper_trader.exit_trade(row['Ticker'], _kite_exit):
+                                    count += 1
+                            paper_trader.export_history_to_excel()
+                            st.cache_data.clear() # Force portfolio refresh
+                            if count > 0:
+                                st.success(f"Closed all {count} active equity trades and archived to Excel.")
+                            else:
+                                st.info("No active equity trades to close.")
+                            st.rerun()
+
+                        st.markdown("---")
+                        st.subheader("🧹 Clear Trades")
+
+                        strategies_in_portfolio = portfolio_df['Strategy'].unique().tolist() if 'Strategy' in portfolio_df.columns and not portfolio_df.empty else []
+                        if strategies_in_portfolio:
+                            strategy_to_clear = st.selectbox("Select Strategy to Clear:", strategies_in_portfolio)
+                            if st.button(f"🧹 Clear '{strategy_to_clear}' Trades", width="stretch"):
+                                paper_trader.clear_portfolio_by_strategy(strategy_to_clear)
+                                st.cache_data.clear()
+                                st.success(f"Cleared {strategy_to_clear}!")
+                                st.rerun()
+
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("🚨 Clear Entire Portfolio", type="secondary"):
+                            # Clear only equity trades from the portfolio file to leave Option Desk / Rolling Straddle untouched
+                            for strat in strategies_in_portfolio:
+                                paper_trader.clear_portfolio_by_strategy(strat)
+                            st.cache_data.clear()
+                            st.success("Cleared All Intraday Equity Trades!")
+                            st.rerun()
+
+            else:
+                st.info("No open paper trades. Run an ORB scan to find opportunities!")
+
+            # --- TRADE HISTORY (Always Visible) ---
+            st.markdown("---")
+            st.subheader("📜 Paper Trade History")
+            history_df = paper_trader.get_history()
+            if not history_df.empty:
+                if 'Strategy' not in history_df.columns:
+                    history_df['Strategy'] = "15-Min ORB"
+
+                # Summary Stats
+                total_realized_pnl = history_df['Final P&L'].sum()
+                total_capital = history_df['Capital Deployed'].sum()
+                overall_perf = (total_realized_pnl / total_capital * 100) if total_capital > 0 else 0
+
+                h_col1, h_col2, h_col3 = st.columns(3)
+                h_col1.metric("Total Realized P&L", f"₹{total_realized_pnl:,.2f}")
+                h_col2.metric("Total Capital Deployed", f"₹{total_capital:,.2f}")
+                h_col3.metric("Overall Performance", f"{overall_perf:,.2f}%")
+
+                # --- STRATEGY-WISE REALIZED P&L BREAKDOWN ---
+                st.markdown("##### 🏁 Realized Performance by Strategy")
+                hist_strat = history_df.groupby('Strategy').agg(
+                    Realized_PL=('Final P&L', 'sum'),
+                    Capital=('Capital Deployed', 'sum'),
+                    Trades=('Ticker', 'count')
+                ).reset_index()
+
+                h_cards_html = []
+                for _, hs_row in hist_strat.iterrows():
+                    h_strat_name = hs_row['Strategy']
+                    hs_pl = hs_row['Realized_PL']
+                    hs_cap = hs_row['Capital']
+                    hs_trades = hs_row['Trades']
+                    hs_ret = (hs_pl / hs_cap * 100) if hs_cap > 0 else 0
+
+                    hs_color = "#10b981" if hs_pl >= 0 else "#ef4444"
+
+                    card = f'<div style="flex: 1; min-width: 180px; background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; border-left: 5px solid {hs_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">' \
+                           f'<div style="font-size: 0.8rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;">🏁 {h_strat_name}</div>' \
+                           f'<div style="font-size: 1.25rem; font-weight: 700; color: {hs_color}; margin: 3px 0;">₹{hs_pl:,.2f}</div>' \
+                           f'<div style="font-size: 0.7rem; color: #94a3b8;">Trades: {hs_trades} | Return: {hs_ret:.2f}%</div>' \
+                           f'</div>'
+                    h_cards_html.append(card)
+
+                st.markdown(f"""
+                <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 25px;">
+                    {"".join(h_cards_html)}
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.dataframe(history_df.style.format({
+                    "EntryPrice": "₹{:.2f}",
+                    "ExitPrice": "₹{:.2f}",
+                    "Capital Deployed": "₹{:.2f}",
+                    "Final P&L": "₹{:.2f}",
+                    "P&L %": "{:.2f}%"
+                }), width='stretch')
+
+                col_export, col_clear = st.columns(2)
+                with col_export:
+                    import io
+                    buffer = io.BytesIO()
+                    paper_trader.export_history_to_excel(buffer)
+                    buffer.seek(0)
+                    st.download_button(
+                        label="📥 Export Trade History to Excel",
+                        data=buffer,
+                        file_name="paper_trade_history.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        width="stretch"
+                    )
+                with col_clear:
+                    if st.button("🗑️ Archive & Clear History", width="stretch"):
+                        paper_trader.archive_history()
+                        # Regenerate Excel file to include archived records
+                        paper_trader.export_history_to_excel()
+                        st.success("History archived to permanent records and cleared!")
+                        st.rerun()
+            else:
+                st.info("No closed trades in history yet.")
+        except Exception as e:
+            st.warning(f"Portfolio update paused: {e}")
+
+
+# Cache expensive Kite LTP calls for 60 s to avoid repeated fetches on every widget interaction
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_swing(access_token):
+    _kite = KiteConnect(api_key=getattr(config, 'KITE_API_KEY', ''))
+    _kite.set_access_token(access_token)
+    return paper_trader.update_swing_portfolio(_kite)
+
+with tab_swing:
+    if st.session_state.get("main_tabs", 0) == 2:
+        st.markdown("## 📊 Positional Swing Portfolio (3:15 PM)")
+        try:
+            if not st.session_state.get('kite_access_token'):
+                st.warning("🔒 Please authenticate with Kite Connect in the sidebar to access the Swing Portfolio.")
+                full_swing_df = pd.DataFrame()
+            else:
+                full_swing_df = _cached_swing(st.session_state.kite_access_token)
+
+            # --- SWING LIFETIME PERSISTENT EQUITY CURVE ---
+            show_swing_curve = st.toggle("📊 Show Lifetime Swing Equity Curve", value=False, key="toggle_swing_curve")
+            if show_swing_curve:
+                try:
+                    _kite_swing = KiteConnect(api_key=getattr(config, 'KITE_API_KEY', ''))
+                    _kite_swing.set_access_token(st.session_state.kite_access_token)
+                    swing_curve = paper_trader.get_swing_equity_curve(_kite_swing)
+
+                    if not swing_curve.empty and len(swing_curve) > 1:
+                        import plotly.graph_objects as go
+
+                        fig_swing = go.Figure()
+                        fig_swing.add_trace(go.Scatter(
+                            x=swing_curve['Date'],
+                            y=swing_curve['Cumulative P&L'],
+                            mode='lines+markers',
+                            line=dict(color='#10b981', width=3, shape='spline'),
+                            marker=dict(size=6, color='#059669'),
+                            fill='tozeroy',
+                            fillcolor='rgba(16, 185, 129, 0.08)',
+                            name='Swing Lifetime P&L',
+                            text=swing_curve.apply(lambda r: f"Date: {r['Date']}<br>Realized Net: ₹{r['P&L']:.2f}<br>Cumulative: ₹{r['Cumulative P&L']:.2f}<br>Tickers: {r['Ticker']}", axis=1),
+                            hoverinfo='text'
+                        ))
+
+                        fig_swing.update_layout(
+                            title=dict(text="📈 Lifetime Swing Equity Curve (Persistent)", font=dict(size=14, color="#1e293b", weight="bold")),
+                            margin=dict(l=20, r=20, t=35, b=20),
+                            height=250,
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            xaxis=dict(
+                                showgrid=True,
+                                gridcolor='#e2e8f0',
+                                tickfont=dict(color="#64748b", size=9)
+                            ),
+                            yaxis=dict(
+                                showgrid=True,
+                                gridcolor='#e2e8f0',
+                                tickfont=dict(color="#64748b", size=9)
+                            ),
+                            hovermode="x unified"
+                        )
+                        st.plotly_chart(fig_swing, width="stretch", config={'displayModeBar': False})
+                    else:
+                        st.info("Insufficient data for lifetime swing equity curve.")
+                except Exception as swing_curve_err:
+                    st.caption(f"Could not load swing equity curve: {swing_curve_err}")
+
+            if not full_swing_df.empty:
+                # Split into Active and Closed
+                active_swing = full_swing_df[full_swing_df['Status'] == 'OPEN'].copy()
+                # Status could be 'SL HIT' or 'TARGET HIT'
+                closed_swing = full_swing_df[full_swing_df['Status'].str.contains('HIT', na=False)].copy()
+
+                # Calculate Swing Summary Metrics (Only for Active)
+                if not active_swing.empty:
+                    s_total_investment = (active_swing['EntryPrice'] * active_swing['Qty']).sum()
+                    s_current_value = (active_swing['Current Price'] * active_swing['Qty']).sum()
+                    s_day_pnl = active_swing['Day P&L'].sum()
+                    s_total_pnl = active_swing['Live P&L'].sum()
+                    s_pnl_pct = (s_total_pnl / s_total_investment * 100) if s_total_investment > 0 else 0
+
+                    s_pnl_color = "#28a745" if s_total_pnl >= 0 else "#dc3545"
+                    s_day_color = "#28a745" if s_day_pnl >= 0 else "#dc3545"
+
+                    # Premium Summary Bar for Swing
+                    st.markdown(f"""
+                    <div style="display: flex; justify-content: space-between; align-items: center; background-color: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid {s_pnl_color}; margin-bottom: 20px;">
+                        <div style="flex: 1; text-align: center;">
+                            <div style="font-size: 0.8rem; color: #6c757d; text-transform: uppercase;">Active Investment</div>
+                            <div style="font-size: 1.1rem; font-weight: bold; color: #212529;">₹{s_total_investment:,.2f}</div>
+                        </div>
+                        <div style="flex: 1; text-align: center; border-left: 1px solid #dee2e6;">
+                            <div style="font-size: 0.8rem; color: #6c757d; text-transform: uppercase;">Current Value</div>
+                            <div style="font-size: 1.1rem; font-weight: bold; color: #212529;">₹{s_current_value:,.2f}</div>
+                        </div>
+                        <div style="flex: 1; text-align: center; border-left: 1px solid #dee2e6;">
+                            <div style="font-size: 0.8rem; color: #6c757d; text-transform: uppercase;">Active Day's P&L</div>
+                            <div style="font-size: 1.1rem; font-weight: bold; color: {s_day_color};">₹{s_day_pnl:,.2f}</div>
+                        </div>
+                        <div style="flex: 1; text-align: center; border-left: 1px solid #dee2e6;">
+                            <div style="font-size: 0.8rem; color: #6c757d; text-transform: uppercase;">Total Active P&L</div>
+                            <div style="font-size: 1.1rem; font-weight: bold; color: {s_pnl_color};">₹{s_total_pnl:,.2f} ({s_pnl_pct:.2f}%)</div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                if st.button("🔄 Refresh Swing P&L"):
+                    st.rerun()
+
+                # --- ACTIVE POSITIONS ---
+                st.subheader("📍 Active Swing Positions")
+                if not active_swing.empty:
+                    # Generate Chart Links
+                    def make_swing_chart_link(row):
+                        if 'Token' in row and pd.notna(row['Token']):
+                            return f"https://kite.zerodha.com/markets/ext/chart/web/ciq/NSE/{row['Ticker']}/{int(row['Token'])}"
+                        return None
+                    active_swing['Chart'] = active_swing.apply(make_swing_chart_link, axis=1)
+
+                    # Column Ordering
+                    cols = list(active_swing.columns)
+                    if 'Chart' in cols:
+                        cols.remove('Chart')
+                        cols.insert(1, 'Chart')
+                    display_cols = [c for c in cols if c not in ['Token', 'Prev Close', 'Status']]
+
+                    st.dataframe(
+                        active_swing.style.format({
+                            "EntryPrice": "₹{:.2f}",
+                            "Current Price": "₹{:.2f}",
+                            "Target": "₹{:.2f}",
+                            "SL": "₹{:.2f}",
+                            "Live P&L": "₹{:.2f}",
+                            "Day P&L": "₹{:.2f}",
+                            "Est. Charges": "₹{:.2f}",
+                            "Net P&L": "₹{:.2f}",
+                            "Return %": "{:.2f}%"
+                        }).map(style_pnl, subset=['Live P&L', 'Day P&L', 'Net P&L', 'Return %'])
+                          .map(style_status, subset=['Status']), 
+                        width='stretch',
+
+                        column_config={
+                            "Chart": st.column_config.LinkColumn("Chart 📈", display_text="View Chart")
+                        },
+                        column_order=display_cols
+                    )
+                else:
+                    st.info("No active swing positions.")
+
+                # --- ARCHIVED SWING POSITIONS ---
+                st.markdown("---")
+                st.subheader("📚 Swing Trade Archive (Historical)")
+
+                # Read from the permanent archive file
+                if os.path.exists(paper_trader.SWING_ARCHIVE_FILE):
+                    archive_df = pd.read_csv(paper_trader.SWING_ARCHIVE_FILE)
+                    if not archive_df.empty:
+                        # Calculate aggregate metrics
+                        total_realized_swing = archive_df['Net P&L'].sum()
+                        total_invested_archive = (archive_df['EntryPrice'] * archive_df['Qty']).sum()
+                        archive_roi_pct = (total_realized_swing / total_invested_archive * 100) if total_invested_archive > 0 else 0
+
+                        arc_color = "#10b981" if total_realized_swing >= 0 else "#ef4444"
+
+                        st.markdown(f"""
+                        <div style="background: white; padding: 25px; border-radius: 16px; border: 1px solid #e2e8f0; border-left: 8px solid {arc_color}; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <div style="color: #64748b; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Total Realized Archive P&L</div>
+                                    <div style="color: {arc_color}; font-weight: 700; font-size: 2.2rem; margin: 5px 0;">₹{total_realized_swing:,.2f}</div>
+                                    <div style="color: #94a3b8; font-size: 0.85rem;">Overall Strategy ROI: <span style="color: {arc_color}; font-weight: bold;">{archive_roi_pct:.2f}%</span></div>
+                                </div>
+                                <div style="text-align: right; border-left: 1px solid #e2e8f0; padding-left: 20px;">
+                                    <div style="color: #64748b; font-size: 0.85rem; font-weight: 600; text-transform: uppercase;">Total Invested</div>
+                                    <div style="color: #1e293b; font-weight: 700; font-size: 1.5rem; margin: 5px 0;">₹{total_invested_archive:,.2f}</div>
+                                    <div style="color: #94a3b8; font-size: 0.75rem;">Across {len(archive_df)} closed trades</div>
+                                </div>
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
 
-                    if st.button("🔄 Refresh Swing P&L"):
-                        st.rerun()
+                        # Display the archive
+                        st.dataframe(archive_df.style.format({
+                            "EntryPrice": "₹{:.2f}",
+                            "Current Price": "₹{:.2f}",
+                            "Target": "₹{:.2f}",
+                            "SL": "₹{:.2f}",
+                            "Live P&L": "₹{:.2f}",
+                            "Est. Charges": "₹{:.2f}",
+                            "Net P&L": "₹{:.2f}",
+                            "Return %": "{:.2f}%"
+                        }).map(style_pnl, subset=['Live P&L', 'Net P&L', 'Return %'])
+                          .map(style_status, subset=['Status']), width='stretch')
 
-                    # --- ACTIVE POSITIONS ---
-                    st.subheader("📍 Active Swing Positions")
-                    if not active_swing.empty:
-                        # Generate Chart Links
-                        def make_swing_chart_link(row):
-                            if 'Token' in row and pd.notna(row['Token']):
-                                return f"https://kite.zerodha.com/markets/ext/chart/web/ciq/NSE/{row['Ticker']}/{int(row['Token'])}"
-                            return None
-                        active_swing['Chart'] = active_swing.apply(make_swing_chart_link, axis=1)
-
-                        # Column Ordering
-                        cols = list(active_swing.columns)
-                        if 'Chart' in cols:
-                            cols.remove('Chart')
-                            cols.insert(1, 'Chart')
-                        display_cols = [c for c in cols if c not in ['Token', 'Prev Close', 'Status']]
-
-                        st.dataframe(
-                            active_swing.style.format({
-                                "EntryPrice": "₹{:.2f}",
-                                "Current Price": "₹{:.2f}",
-                                "Target": "₹{:.2f}",
-                                "SL": "₹{:.2f}",
-                                "Live P&L": "₹{:.2f}",
-                                "Day P&L": "₹{:.2f}",
-                                "Est. Charges": "₹{:.2f}",
-                                "Net P&L": "₹{:.2f}",
-                                "Return %": "{:.2f}%"
-                            }).map(style_pnl, subset=['Live P&L', 'Day P&L', 'Net P&L', 'Return %'])
-                              .map(style_status, subset=['Status']), 
-                            width='stretch',
-
-                            column_config={
-                                "Chart": st.column_config.LinkColumn("Chart 📈", display_text="View Chart")
-                            },
-                            column_order=display_cols
-                        )
-                    else:
-                        st.info("No active swing positions.")
-
-                    # --- ARCHIVED SWING POSITIONS ---
-                    st.markdown("---")
-                    st.subheader("📚 Swing Trade Archive (Historical)")
-
-                    # Read from the permanent archive file
-                    if os.path.exists(paper_trader.SWING_ARCHIVE_FILE):
-                        archive_df = pd.read_csv(paper_trader.SWING_ARCHIVE_FILE)
-                        if not archive_df.empty:
-                            # Calculate aggregate metrics
-                            total_realized_swing = archive_df['Net P&L'].sum()
-                            total_invested_archive = (archive_df['EntryPrice'] * archive_df['Qty']).sum()
-                            archive_roi_pct = (total_realized_swing / total_invested_archive * 100) if total_invested_archive > 0 else 0
-
-                            arc_color = "#10b981" if total_realized_swing >= 0 else "#ef4444"
-
-                            st.markdown(f"""
-                            <div style="background: white; padding: 25px; border-radius: 16px; border: 1px solid #e2e8f0; border-left: 8px solid {arc_color}; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px;">
-                                <div style="display: flex; justify-content: space-between; align-items: center;">
-                                    <div>
-                                        <div style="color: #64748b; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Total Realized Archive P&L</div>
-                                        <div style="color: {arc_color}; font-weight: 700; font-size: 2.2rem; margin: 5px 0;">₹{total_realized_swing:,.2f}</div>
-                                        <div style="color: #94a3b8; font-size: 0.85rem;">Overall Strategy ROI: <span style="color: {arc_color}; font-weight: bold;">{archive_roi_pct:.2f}%</span></div>
-                                    </div>
-                                    <div style="text-align: right; border-left: 1px solid #e2e8f0; padding-left: 20px;">
-                                        <div style="color: #64748b; font-size: 0.85rem; font-weight: 600; text-transform: uppercase;">Total Invested</div>
-                                        <div style="color: #1e293b; font-weight: 700; font-size: 1.5rem; margin: 5px 0;">₹{total_invested_archive:,.2f}</div>
-                                        <div style="color: #94a3b8; font-size: 0.75rem;">Across {len(archive_df)} closed trades</div>
-                                    </div>
-                                </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                            # Display the archive
-                            st.dataframe(archive_df.style.format({
-                                "EntryPrice": "₹{:.2f}",
-                                "Current Price": "₹{:.2f}",
-                                "Target": "₹{:.2f}",
-                                "SL": "₹{:.2f}",
-                                "Live P&L": "₹{:.2f}",
-                                "Est. Charges": "₹{:.2f}",
-                                "Net P&L": "₹{:.2f}",
-                                "Return %": "{:.2f}%"
-                            }).map(style_pnl, subset=['Live P&L', 'Net P&L', 'Return %'])
-                              .map(style_status, subset=['Status']), width='stretch')
-
-                            if st.button("🗑️ Clear Archive"):
-                                os.remove(paper_trader.SWING_ARCHIVE_FILE)
-                                st.success("Swing archive cleared!")
-                                st.rerun()
-                        else:
-                            st.info("Archive is empty.")
-                    else:
-                        st.info("No archived swing trades yet.")
-
-                    if st.button("🧹 Clear Swing Portfolio", type="secondary"):
-                        if os.path.exists(paper_trader.SWING_FILE):
-                            os.remove(paper_trader.SWING_FILE)
-                            st.success("Swing Portfolio cleared!")
+                        if st.button("🗑️ Clear Archive"):
+                            os.remove(paper_trader.SWING_ARCHIVE_FILE)
+                            st.success("Swing archive cleared!")
                             st.rerun()
-                else:
-                    st.info("No active swing trades. Run the 3:15 PM scan to find opportunities!")
-            except Exception as e:
-                st.warning(f"Swing Portfolio update paused: {e}")
-            st.markdown("---")
-
-    with tab_backtest:
-        if st.session_state.get("main_tabs", 0) == 5:
-            st.markdown("## 📉 Historical Strategy Backtester")
-            st.markdown("Upload historical CSV data (minute or daily candles) and run backtesting simulations to evaluate performance.")
-
-            import backtester
-
-            # 1. Backtesting Strategy Selector
-            bt_strategies = [
-                "Bullish Breakout (Intraday)",
-                "Bearish Breakdown (Intraday)",
-                "Bullish VWAP Rejection (Intraday)",
-                "Bearish VWAP Rejection (Intraday)",
-                "52-Week High Breakout",
-                "15-Min ORB Breakout (Intraday)"
-            ]
-
-            col_bt1, col_bt2 = st.columns([1, 1])
-            with col_bt1:
-                bt_strat = st.selectbox("Select Backtesting Strategy", bt_strategies, key="bt_strat_sel")
-                uploaded_files = st.file_uploader("Upload Historical Data CSV(s) (columns: datetime/date, open, high, low, close, volume)", type=["csv"], accept_multiple_files=True, key="bt_file_uploader")
-                bt_ticker = st.text_input("Ticker Name (Optional Filter)", value="", key="bt_ticker_input")
-
-            with col_bt2:
-                bt_capital = st.number_input("Starting Capital (₹)", value=250000, step=50000, key="bt_capital_input")
-                bt_risk = st.number_input("Risk Per Trade (%)", value=1.0, step=0.5, key="bt_risk_input")
-                bt_slippage = st.number_input("Slippage Per Trade (%)", value=0.05, step=0.01, format="%.3f", key="bt_slippage_input")
-
-            if uploaded_files:
-                # Parse dates to show range selector
-                try:
-                    valid_files = []
-                    overall_min_date = None
-                    overall_max_date = None
-
-                    for u_file in uploaded_files:
-                        try:
-                            u_file.seek(0)
-                            raw_df = pd.read_csv(u_file)
-
-                            # Find datetime column dynamically
-                            dt_col = None
-                            for col in raw_df.columns:
-                                if str(col).lower().strip() in ['datetime', 'date', 'time', 'timestamp']:
-                                    dt_col = col
-                                    break
-
-                            if dt_col:
-                                raw_df[dt_col] = pd.to_datetime(raw_df[dt_col], errors='coerce')
-                                # Drop any unparseable rows
-                                raw_df = raw_df.dropna(subset=[dt_col])
-
-                                if not raw_df.empty:
-                                    min_d = raw_df[dt_col].min().date()
-                                    max_d = raw_df[dt_col].max().date()
-                                    if overall_min_date is None or min_d < overall_min_date:
-                                        overall_min_date = min_d
-                                    if overall_max_date is None or max_d > overall_max_date:
-                                        overall_max_date = max_d
-                                    valid_files.append((u_file, dt_col))
-                        except Exception as e:
-                            st.error(f"Error parsing date columns from {u_file.name}: {e}")
-
-                    if valid_files and overall_min_date and overall_max_date:
-                        st.markdown("#### 📅 Filter Backtest Timeframe")
-                        col_date1, col_date2 = st.columns(2)
-                        with col_date1:
-                            bt_start_date = st.date_input(
-                                "Start Date", 
-                                value=overall_min_date, 
-                                min_value=overall_min_date, 
-                                max_value=overall_max_date,
-                                key="bt_start_date_input"
-                            )
-                        with col_date2:
-                            bt_end_date = st.date_input(
-                                "End Date", 
-                                value=overall_max_date, 
-                                min_value=overall_min_date, 
-                                max_value=overall_max_date,
-                                key="bt_end_date_input"
-                            )
                     else:
-                        bt_start_date = None
-                        bt_end_date = None
-                        if uploaded_files:
-                            st.warning("⚠️ No valid date columns were found or parsed in the uploaded files.")
-                except Exception as parse_err:
-                    valid_files = []
+                        st.info("Archive is empty.")
+                else:
+                    st.info("No archived swing trades yet.")
+
+                if st.button("🧹 Clear Swing Portfolio", type="secondary"):
+                    if os.path.exists(paper_trader.SWING_FILE):
+                        os.remove(paper_trader.SWING_FILE)
+                        st.success("Swing Portfolio cleared!")
+                        st.rerun()
+            else:
+                st.info("No active swing trades. Run the 3:15 PM scan to find opportunities!")
+        except Exception as e:
+            st.warning(f"Swing Portfolio update paused: {e}")
+        st.markdown("---")
+
+with tab_backtest:
+    if st.session_state.get("main_tabs", 0) == 5:
+        st.markdown("## 📉 Historical Strategy Backtester")
+        st.markdown("Upload historical CSV data (minute or daily candles) and run backtesting simulations to evaluate performance.")
+
+        import backtester
+
+        # 1. Backtesting Strategy Selector
+        bt_strategies = [
+            "Bullish Breakout (Intraday)",
+            "Bearish Breakdown (Intraday)",
+            "Bullish VWAP Rejection (Intraday)",
+            "Bearish VWAP Rejection (Intraday)",
+            "52-Week High Breakout",
+            "15-Min ORB Breakout (Intraday)"
+        ]
+
+        col_bt1, col_bt2 = st.columns([1, 1])
+        with col_bt1:
+            bt_strat = st.selectbox("Select Backtesting Strategy", bt_strategies, key="bt_strat_sel")
+            uploaded_files = st.file_uploader("Upload Historical Data CSV(s) (columns: datetime/date, open, high, low, close, volume)", type=["csv"], accept_multiple_files=True, key="bt_file_uploader")
+            bt_ticker = st.text_input("Ticker Name (Optional Filter)", value="", key="bt_ticker_input")
+
+        with col_bt2:
+            bt_capital = st.number_input("Starting Capital (₹)", value=250000, step=50000, key="bt_capital_input")
+            bt_risk = st.number_input("Risk Per Trade (%)", value=1.0, step=0.5, key="bt_risk_input")
+            bt_slippage = st.number_input("Slippage Per Trade (%)", value=0.05, step=0.01, format="%.3f", key="bt_slippage_input")
+
+        if uploaded_files:
+            # Parse dates to show range selector
+            try:
+                valid_files = []
+                overall_min_date = None
+                overall_max_date = None
+
+                for u_file in uploaded_files:
+                    try:
+                        u_file.seek(0)
+                        raw_df = pd.read_csv(u_file)
+
+                        # Find datetime column dynamically
+                        dt_col = None
+                        for col in raw_df.columns:
+                            if str(col).lower().strip() in ['datetime', 'date', 'time', 'timestamp']:
+                                dt_col = col
+                                break
+
+                        if dt_col:
+                            raw_df[dt_col] = pd.to_datetime(raw_df[dt_col], errors='coerce')
+                            # Drop any unparseable rows
+                            raw_df = raw_df.dropna(subset=[dt_col])
+
+                            if not raw_df.empty:
+                                min_d = raw_df[dt_col].min().date()
+                                max_d = raw_df[dt_col].max().date()
+                                if overall_min_date is None or min_d < overall_min_date:
+                                    overall_min_date = min_d
+                                if overall_max_date is None or max_d > overall_max_date:
+                                    overall_max_date = max_d
+                                valid_files.append((u_file, dt_col))
+                    except Exception as e:
+                        st.error(f"Error parsing date columns from {u_file.name}: {e}")
+
+                if valid_files and overall_min_date and overall_max_date:
+                    st.markdown("#### 📅 Filter Backtest Timeframe")
+                    col_date1, col_date2 = st.columns(2)
+                    with col_date1:
+                        bt_start_date = st.date_input(
+                            "Start Date", 
+                            value=overall_min_date, 
+                            min_value=overall_min_date, 
+                            max_value=overall_max_date,
+                            key="bt_start_date_input"
+                        )
+                    with col_date2:
+                        bt_end_date = st.date_input(
+                            "End Date", 
+                            value=overall_max_date, 
+                            min_value=overall_min_date, 
+                            max_value=overall_max_date,
+                            key="bt_end_date_input"
+                        )
+                else:
                     bt_start_date = None
                     bt_end_date = None
-                    st.error(f"Error initializing backtest files: {parse_err}")
+                    if uploaded_files:
+                        st.warning("⚠️ No valid date columns were found or parsed in the uploaded files.")
+            except Exception as parse_err:
+                valid_files = []
+                bt_start_date = None
+                bt_end_date = None
+                st.error(f"Error initializing backtest files: {parse_err}")
 
-                if valid_files:
-                    if st.button("🚀 Run Backtest Simulation", type="primary", key="btn_run_backtest"):
-                        with st.spinner("Processing historical data and running simulation..."):
-                            try:
-                                all_trades_list = []
-                                total_files = len(valid_files)
+            if valid_files:
+                if st.button("🚀 Run Backtest Simulation", type="primary", key="btn_run_backtest"):
+                    with st.spinner("Processing historical data and running simulation..."):
+                        try:
+                            all_trades_list = []
+                            total_files = len(valid_files)
 
-                                # Add a callback to show progress in Streamlit
-                                progress_bar_bt = st.progress(0)
-                                status_text_bt = st.empty()
+                            # Add a callback to show progress in Streamlit
+                            progress_bar_bt = st.progress(0)
+                            status_text_bt = st.empty()
 
-                                for idx, (u_file, dt_col) in enumerate(valid_files):
-                                    ticker_name = u_file.name.split(".")[0].upper()
-                                    status_text_bt.text(f"Processing ({idx+1}/{total_files}): {ticker_name}...")
-                                    progress_bar_bt.progress(idx / total_files)
+                            for idx, (u_file, dt_col) in enumerate(valid_files):
+                                ticker_name = u_file.name.split(".")[0].upper()
+                                status_text_bt.text(f"Processing ({idx+1}/{total_files}): {ticker_name}...")
+                                progress_bar_bt.progress(idx / total_files)
 
-                                    u_file.seek(0)
-                                    raw_df = pd.read_csv(u_file)
-                                    raw_df[dt_col] = pd.to_datetime(raw_df[dt_col], errors='coerce')
-                                    raw_df = raw_df.dropna(subset=[dt_col])
+                                u_file.seek(0)
+                                raw_df = pd.read_csv(u_file)
+                                raw_df[dt_col] = pd.to_datetime(raw_df[dt_col], errors='coerce')
+                                raw_df = raw_df.dropna(subset=[dt_col])
 
-                                    # Apply date range filtering if column and range exist
-                                    if dt_col and bt_start_date and bt_end_date:
-                                        start_dt = pd.to_datetime(bt_start_date).tz_localize(None)
-                                        end_dt = pd.to_datetime(bt_end_date).tz_localize(None) + datetime.timedelta(days=1)
-                                        raw_df = raw_df[(raw_df[dt_col] >= start_dt) & (raw_df[dt_col] < end_dt)]
+                                # Apply date range filtering if column and range exist
+                                if dt_col and bt_start_date and bt_end_date:
+                                    start_dt = pd.to_datetime(bt_start_date).tz_localize(None)
+                                    end_dt = pd.to_datetime(bt_end_date).tz_localize(None) + datetime.timedelta(days=1)
+                                    raw_df = raw_df[(raw_df[dt_col] >= start_dt) & (raw_df[dt_col] < end_dt)]
 
-                                    if raw_df.empty:
-                                        continue
+                                if raw_df.empty:
+                                    continue
 
-                                    # Run backtest for this file
-                                    trades_df, _, _ = backtester.run_backtest(
-                                        raw_df,
-                                        strategy=bt_strat,
-                                        capital=bt_capital,
-                                        risk_pct=bt_risk,
-                                        slippage_pct=bt_slippage,
-                                        ticker=bt_ticker if bt_ticker.strip() != "" else ticker_name,
-                                        progress_callback=None
-                                    )
+                                # Run backtest for this file
+                                trades_df, _, _ = backtester.run_backtest(
+                                    raw_df,
+                                    strategy=bt_strat,
+                                    capital=bt_capital,
+                                    risk_pct=bt_risk,
+                                    slippage_pct=bt_slippage,
+                                    ticker=bt_ticker if bt_ticker.strip() != "" else ticker_name,
+                                    progress_callback=None
+                                )
 
-                                    if not trades_df.empty:
-                                        all_trades_list.append(trades_df)
+                                if not trades_df.empty:
+                                    all_trades_list.append(trades_df)
 
-                                progress_bar_bt.empty()
+                            progress_bar_bt.empty()
+                            status_text_bt.empty()
+
+                            # Process aggregated trades
+                            if not all_trades_list:
+                                st.error("No trades were generated across all files in the selected timeframe.")
+                                trades_df = pd.DataFrame()
+                                equity_df = pd.DataFrame()
+                                stats = {}
+                            else:
+                                trades_df = pd.concat(all_trades_list, ignore_index=True)
+                                st.success(f"✅ Backtest simulation completed successfully for {len(valid_files)} stock(s)!")
+
+                                # Recalculate portfolio stats
+                                stats = {}
+                                stats['Total Trades'] = len(trades_df)
+                                wins = trades_df[trades_df['PnL'] > 0]
+                                losses = trades_df[trades_df['PnL'] <= 0]
+                                stats['Wins'] = len(wins)
+                                stats['Losses'] = len(losses)
+                                stats['Win Rate'] = (len(wins) / len(trades_df)) * 100
+                                stats['Total Profit'] = trades_df['PnL'].sum()
+                                stats['Profit Factor'] = abs(wins['PnL'].sum() / losses['PnL'].sum()) if not losses.empty and losses['PnL'].sum() != 0 else float('inf')
+
+                                # Portfolio Equity Curve
+                                trades_df['ExitDateOnly'] = pd.to_datetime(trades_df['ExitTime']).dt.date
+                                daily_pnl = trades_df.groupby('ExitDateOnly')['PnL'].sum().reset_index()
+                                daily_pnl.sort_values('ExitDateOnly', inplace=True)
+                                daily_pnl['Cum_PnL'] = daily_pnl['PnL'].cumsum()
+                                daily_pnl['Equity'] = bt_capital + daily_pnl['Cum_PnL']
+
+                                # Portfolio Max Drawdown
+                                equity_series = daily_pnl['Equity'].tolist()
+                                peak = bt_capital
+                                max_dd = 0.0
+                                for eq in equity_series:
+                                    if eq > peak:
+                                        peak = eq
+                                    dd = peak - eq
+                                    if dd > max_dd:
+                                        max_dd = dd
+                                stats['Max Drawdown'] = max_dd
+                                stats['Max Drawdown %'] = (max_dd / bt_capital) * 100
+
+                                # Portfolio Sharpe Ratio
+                                if len(daily_pnl) > 1:
+                                    daily_returns = daily_pnl['PnL'] / bt_capital
+                                    mean_ret = daily_returns.mean()
+                                    std_ret = daily_returns.std()
+                                    stats['Sharpe Ratio'] = (mean_ret / std_ret) * (252 ** 0.5) if std_ret > 0 else 0.0
+                                else:
+                                    stats['Sharpe Ratio'] = 0.0
+
+                                equity_df = daily_pnl
                                 status_text_bt.empty()
 
-                                # Process aggregated trades
-                                if not all_trades_list:
-                                    st.error("No trades were generated across all files in the selected timeframe.")
-                                    trades_df = pd.DataFrame()
-                                    equity_df = pd.DataFrame()
-                                    stats = {}
+                                st.success("✅ Backtest simulation completed successfully!")
+
+                                # Display Stats
+                                st.markdown("### 📊 Simulation Summary Statistics")
+                                stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+                                stat_col1.metric("Total Trades", f"{stats.get('Total Trades', 0)}")
+                                stat_col1.metric("Win Rate (%)", f"{stats.get('Win Rate', 0.0):.2f}%")
+                                stat_col2.metric("Total Profit (₹)", f"₹{stats.get('Total Profit', 0.0):,.2f}")
+                                stat_col2.metric("Max Drawdown (₹)", f"₹{stats.get('Max Drawdown', 0.0):,.2f}")
+                                stat_col3.metric("Profit Factor", f"{stats.get('Profit Factor', 0.0):.2f}" if stats.get('Profit Factor') != float('inf') else "∞")
+                                stat_col3.metric("Max Drawdown (%)", f"{stats.get('Max Drawdown %', 0.0):.2f}%")
+                                stat_col4.metric("Sharpe Ratio", f"{stats.get('Sharpe Ratio', 0.0):.2f}")
+
+                                # Plot Cumulative PnL / Equity Curve
+                                if not equity_df.empty:
+                                    st.markdown("### 📈 Equity Curve")
+                                    import plotly.graph_objects as go
+                                    fig_bt = go.Figure()
+                                    fig_bt.add_trace(go.Scatter(
+                                        x=equity_df['ExitDateOnly'],
+                                        y=equity_df['Equity'],
+                                        mode='lines+markers',
+                                        line=dict(color='#3b82f6', width=3),
+                                        fill='tozeroy',
+                                        fillcolor='rgba(59, 130, 246, 0.08)',
+                                        name='Equity (₹)'
+                                    ))
+                                    fig_bt.update_layout(
+                                        margin=dict(l=20, r=20, t=35, b=20),
+                                        height=350,
+                                        plot_bgcolor='rgba(0,0,0,0)',
+                                        paper_bgcolor='rgba(0,0,0,0)',
+                                        xaxis=dict(showgrid=True, gridcolor='#e2e8f0'),
+                                        yaxis=dict(showgrid=True, gridcolor='#e2e8f0')
+                                    )
+                                    st.plotly_chart(fig_bt, width='stretch')
+
+                                # Show Detailed Trades table
+                                st.markdown("### 📜 Executed Transactions List")
+                                if not trades_df.empty:
+                                    # Re-order columns for display
+                                    cols_to_disp = [c for c in ['Ticker', 'Type', 'EntryTime', 'EntryPrice', 'Qty', 'SL', 'Target', 'ExitTime', 'ExitPrice', 'Status', 'PnL'] if c in trades_df.columns]
+                                    st.dataframe(
+                                        trades_df[cols_to_disp].style.format({
+                                            "EntryPrice": "₹{:.2f}",
+                                            "ExitPrice": "₹{:.2f}",
+                                            "SL": "₹{:.2f}",
+                                            "Target": "₹{:.2f}",
+                                            "PnL": "₹{:.2f}"
+                                        }).map(style_pnl, subset=['PnL']),
+                                        width='stretch'
+                                    )
                                 else:
-                                    trades_df = pd.concat(all_trades_list, ignore_index=True)
-                                    st.success(f"✅ Backtest simulation completed successfully for {len(valid_files)} stock(s)!")
+                                    st.info("No trades were executed during this backtest timeframe.")
 
-                                    # Recalculate portfolio stats
-                                    stats = {}
-                                    stats['Total Trades'] = len(trades_df)
-                                    wins = trades_df[trades_df['PnL'] > 0]
-                                    losses = trades_df[trades_df['PnL'] <= 0]
-                                    stats['Wins'] = len(wins)
-                                    stats['Losses'] = len(losses)
-                                    stats['Win Rate'] = (len(wins) / len(trades_df)) * 100
-                                    stats['Total Profit'] = trades_df['PnL'].sum()
-                                    stats['Profit Factor'] = abs(wins['PnL'].sum() / losses['PnL'].sum()) if not losses.empty and losses['PnL'].sum() != 0 else float('inf')
+                        except Exception as bt_err:
+                            st.error(f"Error executing backtest simulation: {bt_err}")
+                            import traceback
+                            st.code(traceback.format_exc())
+            else:
+                st.info("ℹ️ Please upload a historical CSV data file to begin.")
 
-                                    # Portfolio Equity Curve
-                                    trades_df['ExitDateOnly'] = pd.to_datetime(trades_df['ExitTime']).dt.date
-                                    daily_pnl = trades_df.groupby('ExitDateOnly')['PnL'].sum().reset_index()
-                                    daily_pnl.sort_values('ExitDateOnly', inplace=True)
-                                    daily_pnl['Cum_PnL'] = daily_pnl['PnL'].cumsum()
-                                    daily_pnl['Equity'] = bt_capital + daily_pnl['Cum_PnL']
-
-                                    # Portfolio Max Drawdown
-                                    equity_series = daily_pnl['Equity'].tolist()
-                                    peak = bt_capital
-                                    max_dd = 0.0
-                                    for eq in equity_series:
-                                        if eq > peak:
-                                            peak = eq
-                                        dd = peak - eq
-                                        if dd > max_dd:
-                                            max_dd = dd
-                                    stats['Max Drawdown'] = max_dd
-                                    stats['Max Drawdown %'] = (max_dd / bt_capital) * 100
-
-                                    # Portfolio Sharpe Ratio
-                                    if len(daily_pnl) > 1:
-                                        daily_returns = daily_pnl['PnL'] / bt_capital
-                                        mean_ret = daily_returns.mean()
-                                        std_ret = daily_returns.std()
-                                        stats['Sharpe Ratio'] = (mean_ret / std_ret) * (252 ** 0.5) if std_ret > 0 else 0.0
-                                    else:
-                                        stats['Sharpe Ratio'] = 0.0
-
-                                    equity_df = daily_pnl
-                                    status_text_bt.empty()
-
-                                    st.success("✅ Backtest simulation completed successfully!")
-
-                                    # Display Stats
-                                    st.markdown("### 📊 Simulation Summary Statistics")
-                                    stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
-                                    stat_col1.metric("Total Trades", f"{stats.get('Total Trades', 0)}")
-                                    stat_col1.metric("Win Rate (%)", f"{stats.get('Win Rate', 0.0):.2f}%")
-                                    stat_col2.metric("Total Profit (₹)", f"₹{stats.get('Total Profit', 0.0):,.2f}")
-                                    stat_col2.metric("Max Drawdown (₹)", f"₹{stats.get('Max Drawdown', 0.0):,.2f}")
-                                    stat_col3.metric("Profit Factor", f"{stats.get('Profit Factor', 0.0):.2f}" if stats.get('Profit Factor') != float('inf') else "∞")
-                                    stat_col3.metric("Max Drawdown (%)", f"{stats.get('Max Drawdown %', 0.0):.2f}%")
-                                    stat_col4.metric("Sharpe Ratio", f"{stats.get('Sharpe Ratio', 0.0):.2f}")
-
-                                    # Plot Cumulative PnL / Equity Curve
-                                    if not equity_df.empty:
-                                        st.markdown("### 📈 Equity Curve")
-                                        import plotly.graph_objects as go
-                                        fig_bt = go.Figure()
-                                        fig_bt.add_trace(go.Scatter(
-                                            x=equity_df['ExitDateOnly'],
-                                            y=equity_df['Equity'],
-                                            mode='lines+markers',
-                                            line=dict(color='#3b82f6', width=3),
-                                            fill='tozeroy',
-                                            fillcolor='rgba(59, 130, 246, 0.08)',
-                                            name='Equity (₹)'
-                                        ))
-                                        fig_bt.update_layout(
-                                            margin=dict(l=20, r=20, t=35, b=20),
-                                            height=350,
-                                            plot_bgcolor='rgba(0,0,0,0)',
-                                            paper_bgcolor='rgba(0,0,0,0)',
-                                            xaxis=dict(showgrid=True, gridcolor='#e2e8f0'),
-                                            yaxis=dict(showgrid=True, gridcolor='#e2e8f0')
-                                        )
-                                        st.plotly_chart(fig_bt, width='stretch')
-
-                                    # Show Detailed Trades table
-                                    st.markdown("### 📜 Executed Transactions List")
-                                    if not trades_df.empty:
-                                        # Re-order columns for display
-                                        cols_to_disp = [c for c in ['Ticker', 'Type', 'EntryTime', 'EntryPrice', 'Qty', 'SL', 'Target', 'ExitTime', 'ExitPrice', 'Status', 'PnL'] if c in trades_df.columns]
-                                        st.dataframe(
-                                            trades_df[cols_to_disp].style.format({
-                                                "EntryPrice": "₹{:.2f}",
-                                                "ExitPrice": "₹{:.2f}",
-                                                "SL": "₹{:.2f}",
-                                                "Target": "₹{:.2f}",
-                                                "PnL": "₹{:.2f}"
-                                            }).map(style_pnl, subset=['PnL']),
-                                            width='stretch'
-                                        )
-                                    else:
-                                        st.info("No trades were executed during this backtest timeframe.")
-
-                            except Exception as bt_err:
-                                st.error(f"Error executing backtest simulation: {bt_err}")
-                                import traceback
-                                st.code(traceback.format_exc())
-                else:
-                    st.info("ℹ️ Please upload a historical CSV data file to begin.")
-
-            st.markdown("---")
+        st.markdown("---")
 
 
-    # --- NOTIFICATION CENTER (SIDEBAR) ---
-    st.sidebar.markdown("### 🔔 Activity Feed")
-    n_count = len(st.session_state.notifications)
+# --- NOTIFICATION CENTER (SIDEBAR) ---
+st.sidebar.markdown("### 🔔 Activity Feed")
+n_count = len(st.session_state.notifications)
 
-    with st.sidebar.expander(f"Recent Alerts ({n_count})", expanded=True):
-        if not st.session_state.notifications:
-            st.caption("No recent activity.")
-        else:
-            if st.button("Clear All Feed", width="stretch"):
-                st.session_state.notifications = []
-                st.rerun()
+with st.sidebar.expander(f"Recent Alerts ({n_count})", expanded=True):
+    if not st.session_state.notifications:
+        st.caption("No recent activity.")
+    else:
+        if st.button("Clear All Feed", width="stretch"):
+            st.session_state.notifications = []
+            st.rerun()
+        
+        for n in st.session_state.notifications:
+            # Create a more professional, minimal one-liner
+            # Strip redundant words
+            m = n['msg'].replace("New ORB Breakout: ", "").replace("New 52W High Breakout at ", "52W High @ ")
+            m = m.replace("Bullish (Strong Trend)", "Bullish ORB")
+            m = m.replace("Bearish (Strong Trend)", "Bearish ORB")
+            
+            color = "#28a745" if "Bullish" in n['msg'] or "Target" in n['msg'] else "#dc3545"
+            st.markdown(f"""
+            <div style="font-size: 0.85rem; border-bottom: 1px solid #f0f2f6; padding: 4px 0;">
+                <span style="color: #6c757d;">{n['time']}</span> | 
+                <span style="font-weight: bold; color: {color};">{n['ticker']}</span> | 
+                <span>{m}</span>
+            </div>
+            """, unsafe_allow_html=True)
 
-            for n in st.session_state.notifications:
-                # Create a more professional, minimal one-liner
-                # Strip redundant words
-                m = n['msg'].replace("New ORB Breakout: ", "").replace("New 52W High Breakout at ", "52W High @ ")
-                m = m.replace("Bullish (Strong Trend)", "Bullish ORB")
-                m = m.replace("Bearish (Strong Trend)", "Bearish ORB")
+# --- GLOBAL LIVE MONITORING SECTION (SIDEBAR) ---
+if st.session_state.get('kite_access_token'):
+    st.sidebar.markdown("---")
+    st.sidebar.header("📡 Live Automation")
+    
+    import json
+    import os
+    SCHEDULER_SETTINGS_FILE = os.path.join("data", "state", ".scheduler_settings.json")
+    os.makedirs(os.path.dirname(SCHEDULER_SETTINGS_FILE), exist_ok=True)
+    
+    def load_scheduler_settings():
+        if os.path.exists(SCHEDULER_SETTINGS_FILE):
+            try:
+                with open(SCHEDULER_SETTINGS_FILE, "r") as f:
+                    return json.load(f)
+            except:
+                pass
+        return {
+            "orb": False,
+            "high_52w": False,
+            "bearish": False,
+            "vwap_rejection": False,
+            "bullish_vwap_rejection": False,
+            "bullish": False,
+            "failed_breakout": False,
+            "vcp": False,
+            "ai_advisor": False
+        }
+        
+    def save_scheduler_settings(settings):
+        try:
+            with open(SCHEDULER_SETTINGS_FILE, "w") as f:
+                json.dump(settings, f, indent=4)
+        except Exception as e:
+            logging.error(f"Failed to save scheduler settings: {e}")
 
-                color = "#28a745" if "Bullish" in n['msg'] or "Target" in n['msg'] else "#dc3545"
-                st.markdown(f"""
-                <div style="font-size: 0.85rem; border-bottom: 1px solid #f0f2f6; padding: 4px 0;">
-                    <span style="color: #6c757d;">{n['time']}</span> | 
-                    <span style="font-weight: bold; color: {color};">{n['ticker']}</span> | 
-                    <span>{m}</span>
-                </div>
-                """, unsafe_allow_html=True)
-
-    # --- GLOBAL LIVE MONITORING SECTION (SIDEBAR) ---
-    if st.session_state.get('kite_access_token'):
-        st.sidebar.markdown("---")
-        st.sidebar.header("📡 Live Automation")
-
-        import json
-        import os
-        SCHEDULER_SETTINGS_FILE = os.path.join("data", "state", ".scheduler_settings.json")
-        os.makedirs(os.path.dirname(SCHEDULER_SETTINGS_FILE), exist_ok=True)
-
-        def load_scheduler_settings():
-            if os.path.exists(SCHEDULER_SETTINGS_FILE):
+    settings = load_scheduler_settings()
+    
+    if 'mon_orb' not in st.session_state: st.session_state.mon_orb = settings.get("orb", False)
+    if 'mon_52w' not in st.session_state: st.session_state.mon_52w = settings.get("high_52w", False)
+    if 'mon_bearish' not in st.session_state: st.session_state.mon_bearish = settings.get("bearish", False)
+    if 'mon_vwap_rejection' not in st.session_state: st.session_state.mon_vwap_rejection = settings.get("vwap_rejection", False)
+    if 'mon_bullish_vwap_rejection' not in st.session_state: st.session_state.mon_bullish_vwap_rejection = settings.get("bullish_vwap_rejection", False)
+    if 'mon_bullish' not in st.session_state: st.session_state.mon_bullish = settings.get("bullish", False)
+    if 'mon_failed_breakout' not in st.session_state: st.session_state.mon_failed_breakout = settings.get("failed_breakout", False)
+    
+    t_orb = st.sidebar.toggle("15-Min ORB Monitor", value=st.session_state.mon_orb)
+    t_52w = st.sidebar.toggle("52-Week High Monitor", value=st.session_state.mon_52w)
+    t_bearish = st.sidebar.toggle("Bearish Breakdown Monitor", value=st.session_state.mon_bearish)
+    t_vwap = st.sidebar.toggle("Bearish VWAP Rejection Monitor", value=st.session_state.mon_vwap_rejection)
+    t_bullish_vwap = st.sidebar.toggle("Bullish VWAP Rejection Monitor", value=st.session_state.mon_bullish_vwap_rejection)
+    t_bullish = st.sidebar.toggle("Bullish Breakout Monitor", value=st.session_state.mon_bullish)
+    t_failed = st.sidebar.toggle("Failed Breakout Short Monitor", value=st.session_state.mon_failed_breakout)
+    
+    # Save if modified
+    if (t_orb != st.session_state.mon_orb or t_52w != st.session_state.mon_52w or 
+        t_bearish != st.session_state.mon_bearish or t_vwap != st.session_state.mon_vwap_rejection or 
+        t_bullish_vwap != st.session_state.mon_bullish_vwap_rejection or t_bullish != st.session_state.mon_bullish or 
+        t_failed != st.session_state.mon_failed_breakout):
+        
+        st.session_state.mon_orb = t_orb
+        st.session_state.mon_52w = t_52w
+        st.session_state.mon_bearish = t_bearish
+        st.session_state.mon_vwap_rejection = t_vwap
+        st.session_state.mon_bullish_vwap_rejection = t_bullish_vwap
+        st.session_state.mon_bullish = t_bullish
+        st.session_state.mon_failed_breakout = t_failed
+        
+        settings.update({
+            "orb": t_orb,
+            "high_52w": t_52w,
+            "bearish": t_bearish,
+            "vwap_rejection": t_vwap,
+            "bullish_vwap_rejection": t_bullish_vwap,
+            "bullish": t_bullish,
+            "failed_breakout": t_failed
+        })
+        save_scheduler_settings(settings)
+        st.rerun()
+        
+    # Persistent VCP (Volatility Contraction) Sidebar Toggle
+    import volatility_contraction_scanner
+    vcp_monitor_state = volatility_contraction_scanner.is_live_monitor_running()
+    mon_vcp_toggle = st.sidebar.toggle("Volatility Contraction Monitor", value=vcp_monitor_state)
+    
+    if mon_vcp_toggle != vcp_monitor_state:
+        if mon_vcp_toggle:
+            watchlist = {}
+            if os.path.exists("volatility_contraction_watchlist.json"):
                 try:
-                    with open(SCHEDULER_SETTINGS_FILE, "r") as f:
-                        return json.load(f)
-                except:
-                    pass
-            return {
+                    with open("volatility_contraction_watchlist.json", "r") as f:
+                        raw_watchlist = json.load(f)
+                    watchlist = {int(k): v for k, v in raw_watchlist.items()}
+                except Exception as json_err:
+                    st.sidebar.error(f"Error loading VCP watchlist: {json_err}")
+                    
+            if not watchlist:
+                st.sidebar.error("⚠️ Watchlist is empty. Run Volatility Contraction Stage 1 & 2 first.")
+            else:
+                kite = KiteConnect(api_key=api_key)
+                kite.set_access_token(st.session_state.kite_access_token)
+                success, msg = volatility_contraction_scanner.start_live_monitor(kite, watchlist)
+                if success:
+                    st.toast("📡 Volatility Contraction Monitor started successfully!", icon="🟢")
+                    settings.update({"vcp": True})
+                    save_scheduler_settings(settings)
+                    st.rerun()
+                else:
+                    st.sidebar.error(msg)
+        else:
+            volatility_contraction_scanner.stop_live_monitor()
+            settings.update({"vcp": False})
+            save_scheduler_settings(settings)
+            st.toast("Stopped background Volatility Contraction monitor.", icon="🛑")
+            st.rerun()
+            
+    # Persistent Toggle for AI Active Positions Advisor
+    import ai_advisor
+    ai_advisor_state = ai_advisor.is_ai_advisor_enabled()
+    ai_advisor_toggle = st.sidebar.toggle("🤖 AI Position Advisor", value=ai_advisor_state)
+    if ai_advisor_toggle != ai_advisor_state:
+        ai_advisor.set_ai_advisor_enabled(ai_advisor_toggle)
+        settings.update({"ai_advisor": ai_advisor_toggle})
+        save_scheduler_settings(settings)
+        st.session_state.last_ai_advisor_run = None
+        st.toast(f"🤖 AI Position Advisor {'Enabled' if ai_advisor_toggle else 'Disabled'}!", icon="🔔")
+        st.rerun()
+        
+    if ai_advisor_toggle:
+        now = datetime.datetime.now()
+        current_time = now.time()
+        start_time = datetime.time(9, 45)
+        end_time = datetime.time(14, 45)
+        is_within_window = (start_time <= current_time <= end_time) and (now.weekday() <= 4)
+        if not is_within_window:
+            st.sidebar.warning("⚠️ AI Advisor is active but currently outside market hours (9:45 AM - 2:45 PM Weekdays).")
+    
+    vcp_active = volatility_contraction_scanner.is_live_monitor_running()
+    if st.session_state.mon_orb or st.session_state.mon_52w or st.session_state.mon_bearish or st.session_state.mon_bullish or st.session_state.mon_vwap_rejection or st.session_state.mon_failed_breakout or vcp_active or ai_advisor_toggle:
+        st.sidebar.success("Live Automation ACTIVE")
+        if st.sidebar.button("⏹️ Stop All Monitors"):
+            st.session_state.mon_orb = False
+            st.session_state.mon_52w = False
+            st.session_state.mon_bearish = False
+            st.session_state.mon_vwap_rejection = False
+            st.session_state.mon_bullish = False
+            st.session_state.mon_failed_breakout = False
+            volatility_contraction_scanner.stop_live_monitor()
+            ai_advisor.set_ai_advisor_enabled(False)
+            st.session_state.last_ai_advisor_run = None
+            
+            settings.update({
                 "orb": False,
                 "high_52w": False,
                 "bearish": False,
@@ -1678,543 +1812,409 @@ with tab_option_desk:
                 "failed_breakout": False,
                 "vcp": False,
                 "ai_advisor": False
-            }
-
-        def save_scheduler_settings(settings):
-            try:
-                with open(SCHEDULER_SETTINGS_FILE, "w") as f:
-                    json.dump(settings, f, indent=4)
-            except Exception as e:
-                logging.error(f"Failed to save scheduler settings: {e}")
-
-        settings = load_scheduler_settings()
-
-        if 'mon_orb' not in st.session_state: st.session_state.mon_orb = settings.get("orb", False)
-        if 'mon_52w' not in st.session_state: st.session_state.mon_52w = settings.get("high_52w", False)
-        if 'mon_bearish' not in st.session_state: st.session_state.mon_bearish = settings.get("bearish", False)
-        if 'mon_vwap_rejection' not in st.session_state: st.session_state.mon_vwap_rejection = settings.get("vwap_rejection", False)
-        if 'mon_bullish_vwap_rejection' not in st.session_state: st.session_state.mon_bullish_vwap_rejection = settings.get("bullish_vwap_rejection", False)
-        if 'mon_bullish' not in st.session_state: st.session_state.mon_bullish = settings.get("bullish", False)
-        if 'mon_failed_breakout' not in st.session_state: st.session_state.mon_failed_breakout = settings.get("failed_breakout", False)
-
-        t_orb = st.sidebar.toggle("15-Min ORB Monitor", value=st.session_state.mon_orb)
-        t_52w = st.sidebar.toggle("52-Week High Monitor", value=st.session_state.mon_52w)
-        t_bearish = st.sidebar.toggle("Bearish Breakdown Monitor", value=st.session_state.mon_bearish)
-        t_vwap = st.sidebar.toggle("Bearish VWAP Rejection Monitor", value=st.session_state.mon_vwap_rejection)
-        t_bullish_vwap = st.sidebar.toggle("Bullish VWAP Rejection Monitor", value=st.session_state.mon_bullish_vwap_rejection)
-        t_bullish = st.sidebar.toggle("Bullish Breakout Monitor", value=st.session_state.mon_bullish)
-        t_failed = st.sidebar.toggle("Failed Breakout Short Monitor", value=st.session_state.mon_failed_breakout)
-
-        # Save if modified
-        if (t_orb != st.session_state.mon_orb or t_52w != st.session_state.mon_52w or 
-            t_bearish != st.session_state.mon_bearish or t_vwap != st.session_state.mon_vwap_rejection or 
-            t_bullish_vwap != st.session_state.mon_bullish_vwap_rejection or t_bullish != st.session_state.mon_bullish or 
-            t_failed != st.session_state.mon_failed_breakout):
-
-            st.session_state.mon_orb = t_orb
-            st.session_state.mon_52w = t_52w
-            st.session_state.mon_bearish = t_bearish
-            st.session_state.mon_vwap_rejection = t_vwap
-            st.session_state.mon_bullish_vwap_rejection = t_bullish_vwap
-            st.session_state.mon_bullish = t_bullish
-            st.session_state.mon_failed_breakout = t_failed
-
-            settings.update({
-                "orb": t_orb,
-                "high_52w": t_52w,
-                "bearish": t_bearish,
-                "vwap_rejection": t_vwap,
-                "bullish_vwap_rejection": t_bullish_vwap,
-                "bullish": t_bullish,
-                "failed_breakout": t_failed
             })
             save_scheduler_settings(settings)
             st.rerun()
 
-        # Persistent VCP (Volatility Contraction) Sidebar Toggle
-        import volatility_contraction_scanner
-        vcp_monitor_state = volatility_contraction_scanner.is_live_monitor_running()
-        mon_vcp_toggle = st.sidebar.toggle("Volatility Contraction Monitor", value=vcp_monitor_state)
-
-        if mon_vcp_toggle != vcp_monitor_state:
-            if mon_vcp_toggle:
-                watchlist = {}
-                if os.path.exists("volatility_contraction_watchlist.json"):
-                    try:
-                        with open("volatility_contraction_watchlist.json", "r") as f:
-                            raw_watchlist = json.load(f)
-                        watchlist = {int(k): v for k, v in raw_watchlist.items()}
-                    except Exception as json_err:
-                        st.sidebar.error(f"Error loading VCP watchlist: {json_err}")
-
-                if not watchlist:
-                    st.sidebar.error("⚠️ Watchlist is empty. Run Volatility Contraction Stage 1 & 2 first.")
-                else:
-                    kite = KiteConnect(api_key=api_key)
-                    kite.set_access_token(st.session_state.kite_access_token)
-                    success, msg = volatility_contraction_scanner.start_live_monitor(kite, watchlist)
-                    if success:
-                        st.toast("📡 Volatility Contraction Monitor started successfully!", icon="🟢")
-                        settings.update({"vcp": True})
-                        save_scheduler_settings(settings)
-                        st.rerun()
-                    else:
-                        st.sidebar.error(msg)
+    # --- SCHEDULER SERVICE MANAGEMENT ---
+    st.sidebar.markdown("---")
+    st.sidebar.header("🕰️ Scheduler Daemon")
+    
+    def is_scheduler_running():
+        import os
+        pid_file = os.path.join("data", "state", ".scheduler.pid")
+        if not os.path.exists(pid_file):
+            return False
+        try:
+            with open(pid_file, "r") as f:
+                pid = int(f.read().strip())
+            
+            if os.name == 'nt':
+                import subprocess
+                # 0x08000000 is CREATE_NO_WINDOW to prevent cmd flashing
+                output = subprocess.check_output(
+                    f'tasklist /FI "PID eq {pid}"', 
+                    shell=True, 
+                    creationflags=0x08000000
+                ).decode(errors='ignore')
+                return str(pid) in output
             else:
-                volatility_contraction_scanner.stop_live_monitor()
-                settings.update({"vcp": False})
-                save_scheduler_settings(settings)
-                st.toast("Stopped background Volatility Contraction monitor.", icon="🛑")
-                st.rerun()
+                os.kill(pid, 0)
+                return True
+        except PermissionError:
+            return True
+        except Exception:
+            return False
 
-        # Persistent Toggle for AI Active Positions Advisor
-        import ai_advisor
-        ai_advisor_state = ai_advisor.is_ai_advisor_enabled()
-        ai_advisor_toggle = st.sidebar.toggle("🤖 AI Position Advisor", value=ai_advisor_state)
-        if ai_advisor_toggle != ai_advisor_state:
-            ai_advisor.set_ai_advisor_enabled(ai_advisor_toggle)
-            settings.update({"ai_advisor": ai_advisor_toggle})
-            save_scheduler_settings(settings)
-            st.session_state.last_ai_advisor_run = None
-            st.toast(f"🤖 AI Position Advisor {'Enabled' if ai_advisor_toggle else 'Disabled'}!", icon="🔔")
-            st.rerun()
-
-        if ai_advisor_toggle:
-            now = datetime.datetime.now()
-            current_time = now.time()
-            start_time = datetime.time(9, 45)
-            end_time = datetime.time(14, 45)
-            is_within_window = (start_time <= current_time <= end_time) and (now.weekday() <= 4)
-            if not is_within_window:
-                st.sidebar.warning("⚠️ AI Advisor is active but currently outside market hours (9:45 AM - 2:45 PM Weekdays).")
-
-        vcp_active = volatility_contraction_scanner.is_live_monitor_running()
-        if st.session_state.mon_orb or st.session_state.mon_52w or st.session_state.mon_bearish or st.session_state.mon_bullish or st.session_state.mon_vwap_rejection or st.session_state.mon_failed_breakout or vcp_active or ai_advisor_toggle:
-            st.sidebar.success("Live Automation ACTIVE")
-            if st.sidebar.button("⏹️ Stop All Monitors"):
-                st.session_state.mon_orb = False
-                st.session_state.mon_52w = False
-                st.session_state.mon_bearish = False
-                st.session_state.mon_vwap_rejection = False
-                st.session_state.mon_bullish = False
-                st.session_state.mon_failed_breakout = False
-                volatility_contraction_scanner.stop_live_monitor()
-                ai_advisor.set_ai_advisor_enabled(False)
-                st.session_state.last_ai_advisor_run = None
-
-                settings.update({
-                    "orb": False,
-                    "high_52w": False,
-                    "bearish": False,
-                    "vwap_rejection": False,
-                    "bullish_vwap_rejection": False,
-                    "bullish": False,
-                    "failed_breakout": False,
-                    "vcp": False,
-                    "ai_advisor": False
-                })
-                save_scheduler_settings(settings)
-                st.rerun()
-
-        # --- SCHEDULER SERVICE MANAGEMENT ---
-        st.sidebar.markdown("---")
-        st.sidebar.header("🕰️ Scheduler Daemon")
-
-        def is_scheduler_running():
-            import os
-            pid_file = os.path.join("data", "state", ".scheduler.pid")
-            if not os.path.exists(pid_file):
-                return False
+    sched_running = is_scheduler_running()
+    if sched_running:
+        st.sidebar.success("🟢 Scheduler is RUNNING")
+        if st.sidebar.button("⏹️ Stop Scheduler"):
             try:
+                pid_file = os.path.join("data", "state", ".scheduler.pid")
                 with open(pid_file, "r") as f:
                     pid = int(f.read().strip())
-
-                if os.name == 'nt':
-                    import subprocess
-                    # 0x08000000 is CREATE_NO_WINDOW to prevent cmd flashing
-                    output = subprocess.check_output(
-                        f'tasklist /FI "PID eq {pid}"', 
-                        shell=True, 
-                        creationflags=0x08000000
-                    ).decode(errors='ignore')
-                    return str(pid) in output
-                else:
-                    os.kill(pid, 0)
-                    return True
-            except PermissionError:
-                return True
-            except Exception:
-                return False
-
-        sched_running = is_scheduler_running()
-        if sched_running:
-            st.sidebar.success("🟢 Scheduler is RUNNING")
-            if st.sidebar.button("⏹️ Stop Scheduler"):
-                try:
-                    pid_file = os.path.join("data", "state", ".scheduler.pid")
-                    with open(pid_file, "r") as f:
-                        pid = int(f.read().strip())
-                    import signal
-                    os.kill(pid, signal.SIGTERM)
-                    st.toast("Scheduler process terminated.", icon="🛑")
-                    if os.path.exists(pid_file):
-                        try:
-                            os.remove(pid_file)
-                        except:
-                            pass
-                    st.rerun()
-                except Exception as ex:
-                    st.sidebar.error(f"Failed to stop scheduler: {ex}")
-        else:
-            st.sidebar.error("🔴 Scheduler is STOPPED")
-            if st.sidebar.button("🚀 Start Scheduler"):
-                import subprocess
-                import sys
-                try:
-                    # Start scheduler service in a new detached process console on Windows
-                    subprocess.Popen(
-                        [sys.executable, "scheduler_service.py"],
-                        creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
-                    )
-                    st.toast("Scheduler started in background!", icon="🚀")
-                    import time
-                    time.sleep(0.5)
-                    st.rerun()
-                except Exception as ex:
-                    st.sidebar.error(f"Failed to start scheduler: {ex}")
-
-
-
-    # --- OPTIONS SELLING BOT (SIDEBAR) ---
-    st.sidebar.markdown("---")
-    st.sidebar.header("🤖 Options Selling Bot")
-    if st.session_state.get('kite_access_token'):
-        import options_bot
-        bot_state = options_bot.get_state()
-
-        bot_index = st.sidebar.radio("Select Index", ["NIFTY", "SENSEX"], horizontal=True)
-
-        if bot_state["is_running"]:
-            st.sidebar.success(f"🟢 Bot is Running ({bot_index})")
-            if st.sidebar.button("⏹️ Stop Bot", width="stretch"):
-                options_bot.stop_bot()
-                st.session_state.view_options_log = True
+                import signal
+                os.kill(pid, signal.SIGTERM)
+                st.toast("Scheduler process terminated.", icon="🛑")
+                if os.path.exists(pid_file):
+                    try:
+                        os.remove(pid_file)
+                    except:
+                        pass
                 st.rerun()
-        else:
-            st.sidebar.info("🔴 Bot is Stopped")
-            if st.sidebar.button("▶️ Start Bot", type="primary", width="stretch"):
-                kite = KiteConnect(api_key=api_key)
-                kite.set_access_token(st.session_state.kite_access_token)
-                success, msg = options_bot.start_bot(kite, bot_index)
-                st.session_state.view_options_log = True
-                if success:
-                    st.sidebar.success(msg)
-                else:
-                    st.sidebar.error(msg)
-                st.rerun()
-
-        if st.sidebar.button("📜 View Signal Log", width="stretch"):
-            st.session_state.view_options_log = not st.session_state.view_options_log
+            except Exception as ex:
+                st.sidebar.error(f"Failed to stop scheduler: {ex}")
     else:
-        st.sidebar.warning("🔒 Login required for Options Bot")
-
-    st.sidebar.markdown("---")
-    st.sidebar.header("🎯 Strategy Control Center")
-
-    KITE_STRATEGIES = [
-        "15-Min ORB Breakout (Kite)", 
-        "52-Week High Breakout (Kite)", 
-        "15-Min Bearish Breakdown (Kite)", 
-        "15-Min Bullish Breakout (Kite)",
-        "Failed Breakout Short (Kite)",
-        "3:15 PM Swing Setup (Kite)",
-        "EOD Long Swing Setup (Kite)",
-        "Multi-Year Breakout (Kite)",
-        "Volatility Contraction Scanner (Kite)",
-        "Minervini VCP Breakout (Kite)",
-        "Bearish VWAP Rejection (Kite)",
-        "Bullish VWAP Rejection (Kite)"
-    ]
-
-    YF_STRATEGIES = ["Swing Trade Candidates", "Volume Breakout Stocks"]
-
-    INTRADAY_STRATEGIES = [
-        "15-Min ORB Breakout (Kite)",
-        "15-Min Bearish Breakdown (Kite)",
-        "15-Min Bullish Breakout (Kite)",
-        "Failed Breakout Short (Kite)",
-        "Bearish VWAP Rejection (Kite)",
-        "Bullish VWAP Rejection (Kite)"
-    ]
-
-    SWING_STRATEGIES = [
-        "52-Week High Breakout (Kite)",
-        "3:15 PM Swing Setup (Kite)",
-        "EOD Long Swing Setup (Kite)",
-        "Multi-Year Breakout (Kite)",
-        "Volatility Contraction Scanner (Kite)",
-        "Minervini VCP Breakout (Kite)",
-        "Swing Trade Candidates",
-        "Volume Breakout Stocks"
-    ]
-
-    selected_intraday = st.sidebar.multiselect(
-        "🕒 Active Intraday Strategies",
-        options=INTRADAY_STRATEGIES,
-        default=["15-Min ORB Breakout (Kite)"]
-    )
-
-    selected_swing = st.sidebar.multiselect(
-        "📈 Active Swing Strategies",
-        options=SWING_STRATEGIES,
-        default=[]
-    )
-
-    selected_strategies = selected_intraday + selected_swing
-
-    # Helper to get cache counts
-    def get_cache_count(file_path):
-        if os.path.exists(file_path):
+        st.sidebar.error("🔴 Scheduler is STOPPED")
+        if st.sidebar.button("🚀 Start Scheduler"):
+            import subprocess
+            import sys
             try:
-                df = pd.read_csv(file_path)
-                return len(df)
-            except: return 0
-        return 0
+                # Start scheduler service in a new detached process console on Windows
+                subprocess.Popen(
+                    [sys.executable, "scheduler_service.py"],
+                    creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
+                )
+                st.toast("Scheduler started in background!", icon="🚀")
+                import time
+                time.sleep(0.5)
+                st.rerun()
+            except Exception as ex:
+                st.sidebar.error(f"Failed to start scheduler: {ex}")
 
-    # Display Cache Status
-    st.sidebar.markdown("### 📊 Cache Status")
-    cache_files = {
-        "15-Min ORB Breakout (Kite)": os.path.join("data", "cache", "orb_trending_cache.csv"),
-        "52-Week High Breakout (Kite)": os.path.join("data", "cache", "high52_cache.csv"),
-        "15-Min Bearish Breakdown (Kite)": os.path.join("data", "cache", "bearish_breakdown_cache.csv"),
-        "15-Min Bullish Breakout (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv"),
-        "Failed Breakout Short (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv")
-    }
 
-    for s in selected_strategies:
-        if s in cache_files:
-            count = get_cache_count(cache_files[s])
-            st.sidebar.markdown(f"**{s}**: `{count}` stocks cached")
 
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📅 Scheduled Cache Service")
-
-    import intraday_cache_service
-    service_state = intraday_cache_service.get_service_status()
-
-    if service_state["running"]:
-        st.sidebar.success(f"🟢 {service_state['status']}")
-
-        # Render tasks progress
-        for task in service_state["task_list"]:
-            t_id = task["id"]
-            t_name = task["name"]
-            t_time = task["scheduled_time"]
-            if t_id in service_state["completed_tasks"]:
-                st.sidebar.markdown(f"✅ ~~{t_name}~~ ({t_time})")
-            elif service_state["current_task"] == t_id:
-                st.sidebar.markdown(f"🔄 **{t_name}** ({t_time})")
-            else:
-                st.sidebar.markdown(f"⏳ {t_name} ({t_time})")
-
-        # Stop button
-        if st.sidebar.button("🛑 Stop Caching Service", width="stretch"):
-            intraday_cache_service.stop_service()
-            st.toast("Stopped background Caching Service.", icon="🛑")
+# --- OPTIONS SELLING BOT (SIDEBAR) ---
+st.sidebar.markdown("---")
+st.sidebar.header("🤖 Options Selling Bot")
+if st.session_state.get('kite_access_token'):
+    import options_bot
+    bot_state = options_bot.get_state()
+    
+    bot_index = st.sidebar.radio("Select Index", ["NIFTY", "SENSEX"], horizontal=True)
+    
+    if bot_state["is_running"]:
+        st.sidebar.success(f"🟢 Bot is Running ({bot_index})")
+        if st.sidebar.button("⏹️ Stop Bot", width="stretch"):
+            options_bot.stop_bot()
+            st.session_state.view_options_log = True
             st.rerun()
     else:
-        st.sidebar.info(f"⚪ Status: {service_state['status']}")
-        if st.sidebar.button("🚀 Start Caching Service", width="stretch", type="primary"):
-            if not st.session_state.kite_access_token:
-                st.sidebar.error("🔒 Authenticate with Kite first.")
+        st.sidebar.info("🔴 Bot is Stopped")
+        if st.sidebar.button("▶️ Start Bot", type="primary", width="stretch"):
+            kite = KiteConnect(api_key=api_key)
+            kite.set_access_token(st.session_state.kite_access_token)
+            success, msg = options_bot.start_bot(kite, bot_index)
+            st.session_state.view_options_log = True
+            if success:
+                st.sidebar.success(msg)
             else:
-                success, msg = intraday_cache_service.start_service()
-                if success:
-                    st.toast("📡 Background Caching Service Started!", icon="🟢")
-                    st.rerun()
-                else:
-                    st.sidebar.error(msg)
+                st.sidebar.error(msg)
+            st.rerun()
+            
+    if st.sidebar.button("📜 View Signal Log", width="stretch"):
+        st.session_state.view_options_log = not st.session_state.view_options_log
+else:
+    st.sidebar.warning("🔒 Login required for Options Bot")
 
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🕰️ Automated Scheduler Service")
+st.sidebar.markdown("---")
+st.sidebar.header("🎯 Strategy Control Center")
 
-    # Helper functions for managing scheduler process
-    PID_FILE = ".scheduler_pid.json"
+KITE_STRATEGIES = [
+    "15-Min ORB Breakout (Kite)", 
+    "52-Week High Breakout (Kite)", 
+    "15-Min Bearish Breakdown (Kite)", 
+    "15-Min Bullish Breakout (Kite)",
+    "Failed Breakout Short (Kite)",
+    "3:15 PM Swing Setup (Kite)",
+    "EOD Long Swing Setup (Kite)",
+    "Multi-Year Breakout (Kite)",
+    "Volatility Contraction Scanner (Kite)",
+    "Minervini VCP Breakout (Kite)",
+    "Bearish VWAP Rejection (Kite)",
+    "Bullish VWAP Rejection (Kite)"
+]
 
-    def get_scheduler_pid():
-        if os.path.exists(PID_FILE):
-            try:
-                with open(PID_FILE, "r") as f:
-                    data = json.load(f)
-                    return data.get("pid")
-            except Exception:
-                pass
-        return None
+YF_STRATEGIES = ["Swing Trade Candidates", "Volume Breakout Stocks"]
 
-    def set_scheduler_pid(pid):
+INTRADAY_STRATEGIES = [
+    "15-Min ORB Breakout (Kite)",
+    "15-Min Bearish Breakdown (Kite)",
+    "15-Min Bullish Breakout (Kite)",
+    "Failed Breakout Short (Kite)",
+    "Bearish VWAP Rejection (Kite)",
+    "Bullish VWAP Rejection (Kite)"
+]
+
+SWING_STRATEGIES = [
+    "52-Week High Breakout (Kite)",
+    "3:15 PM Swing Setup (Kite)",
+    "EOD Long Swing Setup (Kite)",
+    "Multi-Year Breakout (Kite)",
+    "Volatility Contraction Scanner (Kite)",
+    "Minervini VCP Breakout (Kite)",
+    "Swing Trade Candidates",
+    "Volume Breakout Stocks"
+]
+
+selected_intraday = st.sidebar.multiselect(
+    "🕒 Active Intraday Strategies",
+    options=INTRADAY_STRATEGIES,
+    default=["15-Min ORB Breakout (Kite)"]
+)
+
+selected_swing = st.sidebar.multiselect(
+    "📈 Active Swing Strategies",
+    options=SWING_STRATEGIES,
+    default=[]
+)
+
+selected_strategies = selected_intraday + selected_swing
+
+# Helper to get cache counts
+def get_cache_count(file_path):
+    if os.path.exists(file_path):
         try:
-            with open(PID_FILE, "w") as f:
-                json.dump({"pid": pid}, f)
+            df = pd.read_csv(file_path)
+            return len(df)
+        except: return 0
+    return 0
+
+# Display Cache Status
+st.sidebar.markdown("### 📊 Cache Status")
+cache_files = {
+    "15-Min ORB Breakout (Kite)": os.path.join("data", "cache", "orb_trending_cache.csv"),
+    "52-Week High Breakout (Kite)": os.path.join("data", "cache", "high52_cache.csv"),
+    "15-Min Bearish Breakdown (Kite)": os.path.join("data", "cache", "bearish_breakdown_cache.csv"),
+    "15-Min Bullish Breakout (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv"),
+    "Failed Breakout Short (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv")
+}
+
+for s in selected_strategies:
+    if s in cache_files:
+        count = get_cache_count(cache_files[s])
+        st.sidebar.markdown(f"**{s}**: `{count}` stocks cached")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📅 Scheduled Cache Service")
+
+import intraday_cache_service
+service_state = intraday_cache_service.get_service_status()
+
+if service_state["running"]:
+    st.sidebar.success(f"🟢 {service_state['status']}")
+    
+    # Render tasks progress
+    for task in service_state["task_list"]:
+        t_id = task["id"]
+        t_name = task["name"]
+        t_time = task["scheduled_time"]
+        if t_id in service_state["completed_tasks"]:
+            st.sidebar.markdown(f"✅ ~~{t_name}~~ ({t_time})")
+        elif service_state["current_task"] == t_id:
+            st.sidebar.markdown(f"🔄 **{t_name}** ({t_time})")
+        else:
+            st.sidebar.markdown(f"⏳ {t_name} ({t_time})")
+            
+    # Stop button
+    if st.sidebar.button("🛑 Stop Caching Service", width="stretch"):
+        intraday_cache_service.stop_service()
+        st.toast("Stopped background Caching Service.", icon="🛑")
+        st.rerun()
+else:
+    st.sidebar.info(f"⚪ Status: {service_state['status']}")
+    if st.sidebar.button("🚀 Start Caching Service", width="stretch", type="primary"):
+        if not st.session_state.kite_access_token:
+            st.sidebar.error("🔒 Authenticate with Kite first.")
+        else:
+            success, msg = intraday_cache_service.start_service()
+            if success:
+                st.toast("📡 Background Caching Service Started!", icon="🟢")
+                st.rerun()
+            else:
+                st.sidebar.error(msg)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🕰️ Automated Scheduler Service")
+
+# Helper functions for managing scheduler process
+PID_FILE = ".scheduler_pid.json"
+
+def get_scheduler_pid():
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE, "r") as f:
+                data = json.load(f)
+                return data.get("pid")
+        except Exception:
+            pass
+    return None
+
+def set_scheduler_pid(pid):
+    try:
+        with open(PID_FILE, "w") as f:
+            json.dump({"pid": pid}, f)
+    except Exception:
+        pass
+
+def clear_scheduler_pid():
+    if os.path.exists(PID_FILE):
+        try:
+            os.remove(PID_FILE)
         except Exception:
             pass
 
-    def clear_scheduler_pid():
-        if os.path.exists(PID_FILE):
-            try:
-                os.remove(PID_FILE)
-            except Exception:
-                pass
+def is_scheduler_running():
+    pid = get_scheduler_pid()
+    if pid is None:
+        return False
+    try:
+        import subprocess
+        output = subprocess.check_output(f'tasklist /FI "PID eq {pid}"', shell=True).decode()
+        return str(pid) in output
+    except Exception:
+        return False
 
-    def is_scheduler_running():
+scheduler_running = is_scheduler_running()
+
+if scheduler_running:
+    st.sidebar.success(f"🟢 Running (PID: {get_scheduler_pid()})")
+    st.sidebar.caption("Runs daily at 3:15 PM, runs AI advisor, executes trades, and stops.")
+    if st.sidebar.button("🛑 Stop Scheduler Service", width="stretch", key="stop_sched_btn"):
         pid = get_scheduler_pid()
-        if pid is None:
-            return False
-        try:
+        if pid is not None:
             import subprocess
-            output = subprocess.check_output(f'tasklist /FI "PID eq {pid}"', shell=True).decode()
-            return str(pid) in output
-        except Exception:
-            return False
-
-    scheduler_running = is_scheduler_running()
-
-    if scheduler_running:
-        st.sidebar.success(f"🟢 Running (PID: {get_scheduler_pid()})")
-        st.sidebar.caption("Runs daily at 3:15 PM, runs AI advisor, executes trades, and stops.")
-        if st.sidebar.button("🛑 Stop Scheduler Service", width="stretch", key="stop_sched_btn"):
-            pid = get_scheduler_pid()
-            if pid is not None:
-                import subprocess
-                import sys
-                try:
-                    if sys.platform == "win32":
-                        subprocess.run(f"taskkill /F /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    else:
-                        os.kill(pid, 9)
-                    st.toast("Scheduler Service stopped successfully.", icon="🛑")
-                except Exception as e:
-                    st.sidebar.error(f"Error stopping: {e}")
-                clear_scheduler_pid()
-                st.rerun()
-    else:
-        st.sidebar.info("⚪ Status: Stopped")
-        if st.sidebar.button("🚀 Start Scheduler Service", width="stretch", type="primary", key="start_sched_btn"):
-            if not st.session_state.kite_access_token:
-                st.sidebar.error("🔒 Authenticate with Kite first.")
-            else:
-                import subprocess
-                import sys
-                try:
-                    creationflags = 0
-                    if sys.platform == "win32":
-                        creationflags = 0x00000008 # DETACHED_PROCESS
-                    p = subprocess.Popen(
-                        [sys.executable, "scheduler_service.py"],
-                        creationflags=creationflags,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
-                    set_scheduler_pid(p.pid)
-                    st.toast(f"Scheduler Service started (PID: {p.pid})!", icon="🟢")
-                    st.rerun()
-                except Exception as e:
-                    st.sidebar.error(f"Failed to start: {e}")
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("⚡ Bulk Operations")
-
-    if any(s in KITE_STRATEGIES for s in selected_strategies):
+            import sys
+            try:
+                if sys.platform == "win32":
+                    subprocess.run(f"taskkill /F /PID {pid}", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    os.kill(pid, 9)
+                st.toast("Scheduler Service stopped successfully.", icon="🛑")
+            except Exception as e:
+                st.sidebar.error(f"Error stopping: {e}")
+            clear_scheduler_pid()
+            st.rerun()
+else:
+    st.sidebar.info("⚪ Status: Stopped")
+    if st.sidebar.button("🚀 Start Scheduler Service", width="stretch", type="primary", key="start_sched_btn"):
         if not st.session_state.kite_access_token:
-            st.sidebar.warning("🔒 Login required for Kite strategies")
+            st.sidebar.error("🔒 Authenticate with Kite first.")
         else:
-            refresh_all_cache = st.sidebar.checkbox("Refresh All on Previous Cache", value=False, help="Runs all selected strategy scans using previous cached candidates instead of a full market scan.")
-
-            refresh_orb = refresh_all_cache or st.sidebar.checkbox("Refresh ORB Only", value=False, help="Only updates today's momentum for ORB", disabled=refresh_all_cache)
-            refresh_bullish = refresh_all_cache or st.sidebar.checkbox("Refresh Bullish Only", value=False, disabled=refresh_all_cache)
-            refresh_bearish = refresh_all_cache or st.sidebar.checkbox("Refresh Bearish Only", value=False, disabled=refresh_all_cache)
-            refresh_failed = refresh_all_cache or st.sidebar.checkbox("Refresh Failed Breakout Only", value=False, disabled=refresh_all_cache)
-
-            if st.sidebar.button("🚀 Run Sequential Cache", width="stretch"):
-                kite = KiteConnect(api_key=api_key)
-                kite.set_access_token(st.session_state.kite_access_token)
-
-                fno_strength_cached = False
-
-                for s in selected_strategies:
-                    if s == "15-Min ORB Breakout (Kite)":
-                        st.info(f"🔄 Caching ORB...")
-                        p_bar = st.progress(0)
-                        kite_scanner.cache_orb_stocks(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t), refresh_shortlist_only=refresh_orb)
-                        p_bar.empty()
-                    elif s == "52-Week High Breakout (Kite)":
-                        st.info(f"🔄 Caching 52W High...")
-                        p_bar = st.progress(0)
-                        high52_scanner.cache_daily_data(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t))
-                        p_bar.empty()
-                    elif s == "15-Min Bearish Breakdown (Kite)":
-                        st.info(f"🔄 Caching Bearish...")
-                        p_bar = st.progress(0)
-                        import bearish_breakdown_scanner
-                        bearish_breakdown_scanner.cache_bearish_candidates(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t), refresh_only=refresh_bearish)
-                        p_bar.empty()
-                    elif s in ["15-Min Bullish Breakout (Kite)", "Failed Breakout Short (Kite)"]:
-                        p_bar = st.progress(0)
-                        # Case 1: Full Scan (neither refresh checkbox is checked)
-                        if not refresh_bullish and not refresh_failed:
-                            if not fno_strength_cached:
-                                st.info(f"🔄 Running Full F&O Strength Cache Scan...")
-                                bullish_breakout_scanner.cache_bullish_candidates(
-                                    kite, 
-                                    progress_callback=lambda p, t, sym: p_bar.progress(p/t), 
-                                    refresh_only=False
-                                )
-                                fno_strength_cached = True
-                            else:
-                                st.info(f"🔄 F&O Strength Cache already built (shared). Skipping duplicate full scan.")
-                        # Case 2: Refresh Scan (at least one refresh checkbox is checked)
-                        else:
-                            if s == "15-Min Bullish Breakout (Kite)" and refresh_bullish:
-                                st.info(f"🔄 Refreshing Cache for Bullish Breakout...")
-                                bullish_breakout_scanner.cache_bullish_candidates(
-                                    kite, 
-                                    progress_callback=lambda p, t, sym: p_bar.progress(p/t), 
-                                    refresh_only=True
-                                )
-                            elif s == "Failed Breakout Short (Kite)" and refresh_failed:
-                                st.info(f"🔄 Refreshing Cache for Failed Breakout Short...")
-                                import failed_breakout_scanner
-                                failed_breakout_scanner.cache_failed_candidates(
-                                    kite, 
-                                    progress_callback=lambda p, t, sym: p_bar.progress(p/t), 
-                                    refresh_only=True
-                                )
-                        p_bar.empty()
-
-                st.success("✅ Bulk Caching Complete!")
+            import subprocess
+            import sys
+            try:
+                creationflags = 0
+                if sys.platform == "win32":
+                    creationflags = 0x00000008 # DETACHED_PROCESS
+                p = subprocess.Popen(
+                    [sys.executable, "scheduler_service.py"],
+                    creationflags=creationflags,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                set_scheduler_pid(p.pid)
+                st.toast(f"Scheduler Service started (PID: {p.pid})!", icon="🟢")
                 st.rerun()
+            except Exception as e:
+                st.sidebar.error(f"Failed to start: {e}")
 
-    st.sidebar.markdown("---")
-    # Select strategy to view/run from the active list
-    if selected_strategies:
-        strategy = st.sidebar.selectbox("Active View / Manual Scan", selected_strategies)
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚡ Bulk Operations")
+
+if any(s in KITE_STRATEGIES for s in selected_strategies):
+    if not st.session_state.kite_access_token:
+        st.sidebar.warning("🔒 Login required for Kite strategies")
     else:
-        strategy = None
-        st.sidebar.info("Select at least one strategy above.")
+        refresh_all_cache = st.sidebar.checkbox("Refresh All on Previous Cache", value=False, help="Runs all selected strategy scans using previous cached candidates instead of a full market scan.")
+        
+        refresh_orb = refresh_all_cache or st.sidebar.checkbox("Refresh ORB Only", value=False, help="Only updates today's momentum for ORB", disabled=refresh_all_cache)
+        refresh_bullish = refresh_all_cache or st.sidebar.checkbox("Refresh Bullish Only", value=False, disabled=refresh_all_cache)
+        refresh_bearish = refresh_all_cache or st.sidebar.checkbox("Refresh Bearish Only", value=False, disabled=refresh_all_cache)
+        refresh_failed = refresh_all_cache or st.sidebar.checkbox("Refresh Failed Breakout Only", value=False, disabled=refresh_all_cache)
+        
+        if st.sidebar.button("🚀 Run Sequential Cache", width="stretch"):
+            kite = KiteConnect(api_key=api_key)
+            kite.set_access_token(st.session_state.kite_access_token)
+            
+            fno_strength_cached = False
+            
+            for s in selected_strategies:
+                if s == "15-Min ORB Breakout (Kite)":
+                    st.info(f"🔄 Caching ORB...")
+                    p_bar = st.progress(0)
+                    kite_scanner.cache_orb_stocks(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t), refresh_shortlist_only=refresh_orb)
+                    p_bar.empty()
+                elif s == "52-Week High Breakout (Kite)":
+                    st.info(f"🔄 Caching 52W High...")
+                    p_bar = st.progress(0)
+                    high52_scanner.cache_daily_data(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t))
+                    p_bar.empty()
+                elif s == "15-Min Bearish Breakdown (Kite)":
+                    st.info(f"🔄 Caching Bearish...")
+                    p_bar = st.progress(0)
+                    import bearish_breakdown_scanner
+                    bearish_breakdown_scanner.cache_bearish_candidates(kite, progress_callback=lambda p, t, sym: p_bar.progress(p/t), refresh_only=refresh_bearish)
+                    p_bar.empty()
+                elif s in ["15-Min Bullish Breakout (Kite)", "Failed Breakout Short (Kite)"]:
+                    p_bar = st.progress(0)
+                    # Case 1: Full Scan (neither refresh checkbox is checked)
+                    if not refresh_bullish and not refresh_failed:
+                        if not fno_strength_cached:
+                            st.info(f"🔄 Running Full F&O Strength Cache Scan...")
+                            bullish_breakout_scanner.cache_bullish_candidates(
+                                kite, 
+                                progress_callback=lambda p, t, sym: p_bar.progress(p/t), 
+                                refresh_only=False
+                            )
+                            fno_strength_cached = True
+                        else:
+                            st.info(f"🔄 F&O Strength Cache already built (shared). Skipping duplicate full scan.")
+                    # Case 2: Refresh Scan (at least one refresh checkbox is checked)
+                    else:
+                        if s == "15-Min Bullish Breakout (Kite)" and refresh_bullish:
+                            st.info(f"🔄 Refreshing Cache for Bullish Breakout...")
+                            bullish_breakout_scanner.cache_bullish_candidates(
+                                kite, 
+                                progress_callback=lambda p, t, sym: p_bar.progress(p/t), 
+                                refresh_only=True
+                            )
+                        elif s == "Failed Breakout Short (Kite)" and refresh_failed:
+                            st.info(f"🔄 Refreshing Cache for Failed Breakout Short...")
+                            import failed_breakout_scanner
+                            failed_breakout_scanner.cache_failed_candidates(
+                                kite, 
+                                progress_callback=lambda p, t, sym: p_bar.progress(p/t), 
+                                refresh_only=True
+                            )
+                    p_bar.empty()
+            
+            st.success("✅ Bulk Caching Complete!")
+            st.rerun()
+
+st.sidebar.markdown("---")
+# Select strategy to view/run from the active list
+if selected_strategies:
+    strategy = st.sidebar.selectbox("Active View / Manual Scan", selected_strategies)
+else:
+    strategy = None
+    st.sidebar.info("Select at least one strategy above.")
 
 
-    # Data Source Information
-    if strategy in YF_STRATEGIES:
-        st.sidebar.info("This scanner evaluates the latest daily data from Yahoo Finance.")
+# Data Source Information
+if strategy in YF_STRATEGIES:
+    st.sidebar.info("This scanner evaluates the latest daily data from Yahoo Finance.")
 
-    st.sidebar.markdown("---")
-    if st.sidebar.button("❓ Help & Documentation", width="stretch"):
-        show_help_dialog()
+st.sidebar.markdown("---")
+if st.sidebar.button("❓ Help & Documentation", width="stretch"):
+    show_help_dialog()
 
-    # Initialize session state for multi-strategy results
-    if 'all_results' not in st.session_state:
-        st.session_state.all_results = {}
+# Initialize session state for multi-strategy results
+if 'all_results' not in st.session_state:
+    st.session_state.all_results = {}
 
-    # Relocated Options Bot Live Logic to the top
+# Relocated Options Bot Live Logic to the top
 
 
 with tab_scanners:
