@@ -24,6 +24,7 @@ import bearish_vwap_rejection_scanner
 import telegram_agent
 import image_generator
 import paper_trader
+import morning_range_scanner
 
 # Setup logging
 root_logger = logging.getLogger()
@@ -167,7 +168,17 @@ def run_automated_52wh():
         results_df = results_df[~results_df['Ticker'].isin(active_tickers)]
         
         if results_df.empty:
+            logging.info("✅ 52-Week High Scan complete: No breakouts found.")
             return
+
+        # Log found alerts in a distinguishable way
+        logging.info(
+            f"\n============================================================\n"
+            f"📢 52W HIGH BREAKOUT DETECTED\n"
+            f"------------------------------------------------------------\n"
+            f"Tickers: {', '.join(results_df['Ticker'].tolist())}\n"
+            f"============================================================\n"
+        )
 
         # Notify Telegram (Intraday Channel)
         tel_token = config.TELEGRAM_BOT_TOKEN
@@ -195,12 +206,14 @@ def run_automated_bearish_vwap_rejection():
         triggered_df, monitored_df = bearish_vwap_rejection_scanner.scan_bearish_vwap_rejections(kite)
         
         if triggered_df.empty:
+            logging.info("✅ Bearish VWAP Rejection Scan complete: No triggered setups.")
             return
 
         import notification_helper
         new_tickers = notification_helper.filter_new_tickers("BEARISH_VWAP_REJECTION", triggered_df['Ticker'].tolist())
         
         if not new_tickers:
+            logging.info("✅ Bearish VWAP Rejection Scan complete: No new tickers to notify.")
             return
             
         new_df = triggered_df[triggered_df['Ticker'].isin(new_tickers)]
@@ -211,6 +224,7 @@ def run_automated_bearish_vwap_rejection():
         new_df = new_df[~new_df['Ticker'].isin(active_tickers)]
         
         if new_df.empty:
+            logging.info("✅ Bearish VWAP Rejection Scan complete: No active tickers left after filtering.")
             return
         
         # Notify Telegram (Intraday Channel)
@@ -257,6 +271,19 @@ def run_automated_bearish_vwap_rejection():
                 capital = 250000 # Default capital per trade
                 qty = int(capital / row['Price'])
                 
+                logging.info(
+                    f"\n============================================================\n"
+                    f"🎯 TRADE TRIGGERED & EXECUTED 🎯\n"
+                    f"------------------------------------------------------------\n"
+                    f"Scanner:      Bearish VWAP Rejection\n"
+                    f"Ticker:       {row['Ticker']}\n"
+                    f"Trade Type:   Bearish Pullback (Short)\n"
+                    f"Entry Price:  ₹{row['Price']:.2f}\n"
+                    f"Stop Loss:    ₹{row['SL']:.2f}\n"
+                    f"Quantity:     {qty}\n"
+                    f"============================================================\n"
+                )
+                
                 paper_trader.execute_paper_trade(
                     ticker=row['Ticker'],
                     trade_type="Bearish Pullback",
@@ -291,11 +318,13 @@ def run_automated_bullish_vwap_rejection():
         import bullish_vwap_rejection_scanner
         triggered_df, monitored_df = bullish_vwap_rejection_scanner.scan_bullish_vwap_rejections(kite)
         if triggered_df.empty:
+            logging.info("✅ Bullish VWAP Rejection Scan complete: No triggered setups.")
             return
 
         import notification_helper
         new_tickers = notification_helper.filter_new_tickers("BULLISH_VWAP_REJECTION", triggered_df['Ticker'].tolist())
         if not new_tickers:
+            logging.info("✅ Bullish VWAP Rejection Scan complete: No new tickers to notify.")
             return
             
         new_df = triggered_df[triggered_df['Ticker'].isin(new_tickers)]
@@ -304,6 +333,7 @@ def run_automated_bullish_vwap_rejection():
         new_df = new_df[~new_df['Ticker'].isin(active_tickers)]
         
         if new_df.empty:
+            logging.info("✅ Bullish VWAP Rejection Scan complete: No active tickers left after filtering.")
             return
             
         tel_token = config.TELEGRAM_BOT_TOKEN
@@ -333,6 +363,20 @@ def run_automated_bullish_vwap_rejection():
             try:
                 capital = 250000
                 qty = int(capital / row['Price'])
+                
+                logging.info(
+                    f"\n============================================================\n"
+                    f"🎯 TRADE TRIGGERED & EXECUTED 🎯\n"
+                    f"------------------------------------------------------------\n"
+                    f"Scanner:      Bullish VWAP Rejection\n"
+                    f"Ticker:       {row['Ticker']}\n"
+                    f"Trade Type:   Bullish Pullback (Long)\n"
+                    f"Entry Price:  ₹{row['Price']:.2f}\n"
+                    f"Stop Loss:    ₹{row['SL']:.2f}\n"
+                    f"Quantity:     {qty}\n"
+                    f"============================================================\n"
+                )
+                
                 paper_trader.execute_paper_trade(
                     ticker=row['Ticker'],
                     trade_type="Bullish Pullback",
@@ -367,15 +411,18 @@ def run_automated_failed_breakouts():
         import failed_breakout_scanner
         res_failed = failed_breakout_scanner.scan_failed_breakouts(kite)
         if res_failed.empty:
+            logging.info("✅ Failed Breakout Scan complete: No candidates.")
             return
             
         triggered_failed = res_failed[res_failed['Status'] == 'Triggered']
         if triggered_failed.empty:
+            logging.info("✅ Failed Breakout Scan complete: No triggered setups.")
             return
             
         import notification_helper
         new_tickers = notification_helper.filter_new_tickers("FAILED_BREAKOUT", triggered_failed['Ticker'].tolist())
         if not new_tickers:
+            logging.info("✅ Failed Breakout Scan complete: No new tickers to notify.")
             return
             
         new_fail = triggered_failed[triggered_failed['Ticker'].isin(new_tickers)]
@@ -384,6 +431,7 @@ def run_automated_failed_breakouts():
         new_fail = new_fail[~new_fail['Ticker'].isin(active_tickers)]
         
         if new_fail.empty:
+            logging.info("✅ Failed Breakout Scan complete: No active tickers left after filtering.")
             return
             
         tel_token = config.TELEGRAM_BOT_TOKEN
@@ -400,6 +448,19 @@ def run_automated_failed_breakouts():
                 telegram_agent.send_message(msg, tel_token, tel_chat_id)
                 
             # Execute Paper Trade
+            logging.info(
+                f"\n============================================================\n"
+                f"🎯 TRADE TRIGGERED & EXECUTED 🎯\n"
+                f"------------------------------------------------------------\n"
+                f"Scanner:      Failed Breakout Short\n"
+                f"Ticker:       {row['Ticker']}\n"
+                f"Trade Type:   Failed Breakout\n"
+                f"Entry Price:  ₹{float(row['Entry Price']):.2f}\n"
+                f"Stop Loss:    ₹{float(row['Stop Loss']):.2f}\n"
+                f"Quantity:     {int(row['Qty'])}\n"
+                f"============================================================\n"
+            )
+            
             paper_trader.execute_paper_trade(
                 ticker=row['Ticker'],
                 trade_type="Failed Breakout",
@@ -432,15 +493,18 @@ def run_automated_bullish_breakouts():
         import bullish_breakout_scanner
         res_bull = bullish_breakout_scanner.scan_bullish_breakouts(kite)
         if res_bull.empty:
+            logging.info("✅ Bullish Breakout Scan complete: No candidates.")
             return
             
         triggered_bull = res_bull[res_bull['Status'] == 'Triggered']
         if triggered_bull.empty:
+            logging.info("✅ Bullish Breakout Scan complete: No triggered setups.")
             return
             
         import notification_helper
         new_tickers = notification_helper.filter_new_tickers("BULLISH", triggered_bull['Ticker'].tolist())
         if not new_tickers:
+            logging.info("✅ Bullish Breakout Scan complete: No new tickers to notify.")
             return
             
         new_bull = triggered_bull[triggered_bull['Ticker'].isin(new_tickers)]
@@ -449,6 +513,7 @@ def run_automated_bullish_breakouts():
         new_bull = new_bull[~new_bull['Ticker'].isin(active_tickers)]
         
         if new_bull.empty:
+            logging.info("✅ Bullish Breakout Scan complete: No active tickers left after filtering.")
             return
             
         tel_token = config.TELEGRAM_BOT_TOKEN
@@ -465,6 +530,19 @@ def run_automated_bullish_breakouts():
                 telegram_agent.send_message(msg, tel_token, tel_chat_id)
                 
             # Execute Paper Trade
+            logging.info(
+                f"\n============================================================\n"
+                f"🎯 TRADE TRIGGERED & EXECUTED 🎯\n"
+                f"------------------------------------------------------------\n"
+                f"Scanner:      Bullish Breakout\n"
+                f"Ticker:       {row['Ticker']}\n"
+                f"Trade Type:   Bullish Breakout (Long)\n"
+                f"Entry Price:  ₹{float(row['Entry Price']):.2f}\n"
+                f"Stop Loss:    ₹{float(row['Stop Loss']):.2f}\n"
+                f"Quantity:     {int(row['Qty'])}\n"
+                f"============================================================\n"
+            )
+            
             paper_trader.execute_paper_trade(
                 ticker=row['Ticker'],
                 trade_type="Bullish Breakout",
@@ -497,15 +575,18 @@ def run_automated_bearish_breakdowns():
         import bearish_breakdown_scanner
         res_bear = bearish_breakdown_scanner.scan_bearish_breakdowns(kite)
         if res_bear.empty:
+            logging.info("✅ Bearish Breakdown Scan complete: No candidates.")
             return
             
         triggered_bear = res_bear[res_bear['Status'] == 'Triggered']
         if triggered_bear.empty:
+            logging.info("✅ Bearish Breakdown Scan complete: No triggered setups.")
             return
             
         import notification_helper
         new_tickers = notification_helper.filter_new_tickers("BEARISH", triggered_bear['Ticker'].tolist())
         if not new_tickers:
+            logging.info("✅ Bearish Breakdown Scan complete: No new tickers to notify.")
             return
             
         new_bear = triggered_bear[triggered_bear['Ticker'].isin(new_tickers)]
@@ -514,6 +595,7 @@ def run_automated_bearish_breakdowns():
         new_bear = new_bear[~new_bear['Ticker'].isin(active_tickers)]
         
         if new_bear.empty:
+            logging.info("✅ Bearish Breakdown Scan complete: No active tickers left after filtering.")
             return
             
         tel_token = config.TELEGRAM_BOT_TOKEN
@@ -530,6 +612,19 @@ def run_automated_bearish_breakdowns():
                 telegram_agent.send_message(msg, tel_token, tel_chat_id)
                 
             # Execute Paper Trade
+            logging.info(
+                f"\n============================================================\n"
+                f"🎯 TRADE TRIGGERED & EXECUTED 🎯\n"
+                f"------------------------------------------------------------\n"
+                f"Scanner:      Bearish Breakdown\n"
+                f"Ticker:       {row['Ticker']}\n"
+                f"Trade Type:   Bearish Breakdown (Short)\n"
+                f"Entry Price:  ₹{float(row['Entry Price']):.2f}\n"
+                f"Stop Loss:    ₹{float(row['Stop Loss']):.2f}\n"
+                f"Quantity:     {int(row['Qty'])}\n"
+                f"============================================================\n"
+            )
+            
             paper_trader.execute_paper_trade(
                 ticker=row['Ticker'],
                 trade_type="Bearish Breakdown",
@@ -545,6 +640,23 @@ def run_automated_bearish_breakdowns():
         
     except Exception as e:
         logging.error(f"Error in automated Bearish Breakdowns: {e}")
+
+def run_automated_morning_range():
+    """Run the Morning Range Strength/Weakness scanner automated."""
+    if not is_strategy_enabled("morning_range"):
+        return
+    if not is_market_open():
+        return
+
+    logging.info("📡 Running Automated Morning Range Scan...")
+    kite = get_kite_instance()
+    if not kite:
+        return
+
+    try:
+        morning_range_scanner.scan_morning_range(kite)
+    except Exception as e:
+        logging.error(f"Error during automated Morning Range scan: {e}")
 
 def run_morning_cache():
     """Pre-calculate data for both scanners and archive yesterday's history at 9:05 AM."""
@@ -767,6 +879,48 @@ Use this format exactly (do not include introductory greetings or disclaimers, g
     except Exception as e:
         logging.error(f"Error in run_ai_position_advisor: {e}")
 
+def run_periodic_pnl_report():
+    """Periodically monitors active positions and sends P&L updates to Telegram every 10 minutes."""
+    now = datetime.datetime.now()
+    if now.weekday() > 4: # Weekend
+        return
+        
+    # Time filter: 9:30 AM to 2:45 PM
+    current_time = now.time()
+    start_time = datetime.time(9, 30)
+    end_time = datetime.time(14, 45)
+    if not (start_time <= current_time <= end_time):
+        return
+        
+    logging.info("📡 Running Periodic P&L Notification scan...")
+    kite = get_kite_instance()
+    if not kite:
+        return
+        
+    try:
+        import paper_trader
+        portfolio_df = paper_trader.update_portfolio_pnl(kite)
+        if portfolio_df.empty:
+            return
+            
+        # Filter out Option Desk and Rolling Straddle trades for regular reporting if desired
+        portfolio_df = portfolio_df[~portfolio_df['Strategy'].isin(['Option Desk', 'Rolling Straddle'])].copy()
+        
+        has_open_positions = not portfolio_df.empty and (portfolio_df['Status'] == 'Active').any()
+        if not has_open_positions:
+            return
+            
+        tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
+        # Prioritize personal private chat ID for P&L reports if configured
+        tel_chat_id = getattr(config, 'TELEGRAM_PERSONAL_CHAT_ID', '') or getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', getattr(config, 'TELEGRAM_CHAT_ID', ''))
+        
+        if tel_token and tel_chat_id:
+            import telegram_agent
+            if telegram_agent.send_portfolio_report(portfolio_df, tel_token, tel_chat_id):
+                logging.info("✅ Periodic portfolio P&L report sent to Telegram.")
+    except Exception as e:
+        logging.error(f"Error sending periodic portfolio P&L report: {e}")
+
 def send_daily_swing_report():
     """Compiles and sends daily swing portfolio report with stats, P&L, ROI%, and equity curve chart at 3:15 PM."""
     if datetime.datetime.today().weekday() > 4:
@@ -975,26 +1129,11 @@ schedule.every().day.at("09:31").do(run_automated_orb, scan_label="Initial 9:31 
 # 10:00 AM IST - Follow-up Sustainability Scan
 schedule.every().day.at("10:00").do(run_automated_orb, scan_label="Sustainability 10:00 AM")
 
-# Continuous 52WH Scan (Every 5 minutes between 9:45 and 14:45)
-schedule.every(5).minutes.do(run_automated_52wh)
-
-# Continuous Bearish VWAP Rejection Scan (Every 5 minutes between 9:45 and 14:45)
-schedule.every(5).minutes.do(run_automated_bearish_vwap_rejection)
-
-# Continuous Bullish VWAP Rejection Scan (Every 5 minutes between 9:45 and 14:45)
-schedule.every(5).minutes.do(run_automated_bullish_vwap_rejection)
-
-# Continuous Failed Breakout Scan (Every 5 minutes between 9:45 and 14:45)
-schedule.every(5).minutes.do(run_automated_failed_breakouts)
-
-# Continuous Bullish Breakout Scan (Every 5 minutes between 9:45 and 14:45)
-schedule.every(5).minutes.do(run_automated_bullish_breakouts)
-
-# Continuous Bearish Breakdown Scan (Every 5 minutes between 9:45 and 14:45)
-schedule.every(5).minutes.do(run_automated_bearish_breakdowns)
-
 # AI Advisor Active Positions monitor (Every 10 minutes between 9:45 AM and 2:45 PM)
 schedule.every(10).minutes.do(run_ai_position_advisor)
+
+# Regular Portfolio P&L Report (Every 10 minutes between 9:30 AM and 2:45 PM)
+schedule.every(10).minutes.do(run_periodic_pnl_report)
 
 # 3:20 PM IST - Auto Square-off
 schedule.every().day.at("15:20").do(run_auto_square_off)
@@ -1013,7 +1152,49 @@ if __name__ == "__main__":
                 schedule.run_pending()
             except Exception as e:
                 logging.error(f"Scheduler loop error: {e}")
-            time.sleep(30)
+            
+            # If market is open, run intraday scanners continuously
+            if is_market_open():
+                try:
+                    run_automated_52wh()
+                except Exception as e:
+                    logging.error(f"Continuous loop - 52WH error: {e}")
+                
+                try:
+                    run_automated_bearish_vwap_rejection()
+                except Exception as e:
+                    logging.error(f"Continuous loop - Bearish VWAP error: {e}")
+                
+                try:
+                    run_automated_bullish_vwap_rejection()
+                except Exception as e:
+                    logging.error(f"Continuous loop - Bullish VWAP error: {e}")
+                
+                try:
+                    run_automated_failed_breakouts()
+                except Exception as e:
+                    logging.error(f"Continuous loop - Failed Breakouts error: {e}")
+                
+                try:
+                    run_automated_bullish_breakouts()
+                except Exception as e:
+                    logging.error(f"Continuous loop - Bullish Breakouts error: {e}")
+                
+                try:
+                    run_automated_bearish_breakdowns()
+                except Exception as e:
+                    logging.error(f"Continuous loop - Bearish Breakdowns error: {e}")
+                    
+                try:
+                    run_automated_morning_range()
+                except Exception as e:
+                    logging.error(f"Continuous loop - Morning Range error: {e}")
+                
+                # Sleep a short duration when market is open to prevent overloading
+                time.sleep(5)
+            else:
+                # Sleep longer (30 seconds) outside market hours to save resources
+                time.sleep(30)
     finally:
         if os.path.exists(pid_file):
             try:

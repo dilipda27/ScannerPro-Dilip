@@ -175,7 +175,7 @@ def scan_failed_breakouts(kite, progress_callback=None):
     logging.info(f"Pre-screening {total} candidates with batch quotes...")
     try:
         all_tickers = [f"NSE:{s}" for s in cache_df['Ticker']]
-        quotes = kite.ohlc(all_tickers)
+        quotes = kite_scanner.fetch_ohlc_safe(kite, all_tickers)
         
         active_candidates = []
         for _, row in cache_df.iterrows():

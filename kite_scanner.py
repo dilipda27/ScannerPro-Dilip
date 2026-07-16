@@ -174,7 +174,64 @@ def get_kite_instruments(kite, symbols):
         logging.error(f"Error fetching instruments from Kite: {e}")
         return {}
 
+
+def fetch_ohlc_safe(kite, tickers, chunk_size=200, retries=2):
+    """
+    Fetch OHLC quotes from Kite API in chunks to prevent large URL request errors
+    or 502 Bad Gateway errors. Automatically retries on network/gateway errors.
+    """
+    quotes = {}
+    if not tickers:
+        return quotes
+        
+    for i in range(0, len(tickers), chunk_size):
+        chunk = tickers[i:i+chunk_size]
+        success = False
+        attempt_err = None
+        
+        for attempt in range(retries):
+            try:
+                enforce_kite_rate_limit()
+                res = kite.ohlc(chunk)
+                if res:
+                    quotes.update(res)
+                success = True
+                break
+            except Exception as e:
+                attempt_err = e
+                error_str = str(e).lower()
+                display_error = str(e)
+                if "<html>" in error_str or "cloudflare" in error_str or "502" in error_str or "bad gateway" in error_str:
+                    display_error = "502 Bad Gateway (Cloudflare/Kite)"
+                elif "503" in error_str:
+                    display_error = "503 Service Unavailable"
+                elif "504" in error_str:
+                    display_error = "504 Gateway Timeout"
+                
+                logging.warning(f"Attempt {attempt+1}/{retries} failed for OHLC chunk starting at {i}: {display_error}")
+                time.sleep(1.5 * (attempt + 1))
+                
+        if not success:
+            # If a chunk fails after retries, try sub-chunking it into chunks of 50 to see if smaller size passes
+            logging.info(f"Retrying chunk starting at {i} with smaller sub-chunks...")
+            for j in range(0, len(chunk), 50):
+                sub_chunk = chunk[j:j+50]
+                for attempt in range(retries):
+                    try:
+                        enforce_kite_rate_limit()
+                        res = kite.ohlc(sub_chunk)
+                        if res:
+                            quotes.update(res)
+                        break
+                    except Exception as sub_e:
+                        if attempt == retries - 1:
+                            logging.error(f"Sub-chunk starting at {i+j} failed permanently: {sub_e}")
+                            raise sub_e
+                        time.sleep(1)
+    return quotes
+
 CACHE_DIR = os.path.join("data", "cache", "kite_historical_cache")
+
 
 def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retries=2):
     """
@@ -295,8 +352,8 @@ def scan_315_setups(kite, progress_callback=None):
     logging.info(f"Pre-screening {total_symbols} stocks using batch OHLC...")
     try:
         all_tickers = [f"NSE:{s}" for s in token_map.keys()]
-        # Fetch OHLC for all stocks in one go (Kite allows up to 500)
-        ohlc_dict = kite.ohlc(all_tickers)
+        # Fetch OHLC for all stocks in one go (chunked safely to avoid 502 Bad Gateway)
+        ohlc_dict = fetch_ohlc_safe(kite, all_tickers)
         
         filtered_tokens = {}
         for s, t in token_map.items():
@@ -447,8 +504,8 @@ def cache_orb_stocks(kite, progress_callback=None, refresh_shortlist_only=False)
     logging.info(f"Pre-filtering {len(token_map)} stocks by price...")
     all_tickers = [f"NSE:{s}" for s in token_map.keys()]
     try:
-        # Kite allows up to 500 symbols per quote/ohlc call
-        ohlc_dict = kite.ohlc(all_tickers)
+        # Kite allows up to 500 symbols per quote/ohlc call (chunked safely to avoid 502 Bad Gateway)
+        ohlc_dict = fetch_ohlc_safe(kite, all_tickers)
         
         # Filter symbols that are within our tradeable price range (100 - 5000)
         # and ensure they have some volume
@@ -926,7 +983,7 @@ def run_unified_morning_cache(kite, progress_callback=None):
     logging.info(f"Pre-filtering {len(token_map)} stocks by price...")
     all_tickers = [f"NSE:{s}" for s in token_map.keys()]
     try:
-        ohlc_dict = kite.ohlc(all_tickers)
+        ohlc_dict = fetch_ohlc_safe(kite, all_tickers)
         filtered_symbols = []
         for s in token_map.keys():
             quote = ohlc_dict.get(f"NSE:{s}")

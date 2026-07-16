@@ -31,8 +31,8 @@ def cache_daily_data(kite, progress_callback=None):
     logging.info(f"Pre-filtering {len(token_map)} stocks by price...")
     all_tickers = [f"NSE:{s}" for s in token_map.keys()]
     try:
-        # Fetch OHLC for all symbols in one call
-        ohlc_dict = kite.ohlc(all_tickers)
+        # Fetch OHLC for all symbols in one call (safely chunked)
+        ohlc_dict = kite_scanner.fetch_ohlc_safe(kite, all_tickers)
         filtered_symbols = []
         for s in token_map.keys():
             quote = ohlc_dict.get(f"NSE:{s}")
@@ -194,8 +194,8 @@ def scan_52w_breakouts(kite, progress_callback=None, only_closed_candles=True):
     logging.info(f"Pre-screening {total_symbols} stocks with batch quotes...")
     all_tickers = [f"NSE:{s}" for s in cache_df['Ticker'].tolist()]
     try:
-        # Get live quotes for all cached stocks
-        quotes = kite.ohlc(all_tickers)
+        # Get live quotes for all cached stocks (safely chunked)
+        quotes = kite_scanner.fetch_ohlc_safe(kite, all_tickers)
         # Filter cache_df to only include stocks near or above breakout
         # We use a 0.5% buffer to be safe
         valid_tickers = []

@@ -178,7 +178,7 @@ def scan_bearish_breakdowns(kite, progress_callback=None):
     logging.info(f"Pre-screening {total} bearish candidates with batch quotes...")
     try:
         all_tickers = [f"NSE:{s}" for s in cache_df['Ticker']]
-        quotes = kite.ohlc(all_tickers)
+        quotes = kite_scanner.fetch_ohlc_safe(kite, all_tickers)
         
         # Filter candidates: Price must be near or below the breakdown level
         active_candidates = []

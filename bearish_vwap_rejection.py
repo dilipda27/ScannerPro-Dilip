@@ -334,30 +334,56 @@ def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None
         
     return df_session, alerts
 
-def batch_pre_screen(cache_df):
+def batch_pre_screen(cache_df, kite=None):
     """Filters the stock universe to select stocks currently trading in active downtrends."""
     tickers = cache_df['Ticker'].tolist()
     if not tickers:
         return cache_df
         
     try:
-        logging.info(f"⚡ Bulk Pre-Screen: Downloading current daily prices for {len(tickers)} tickers...")
-        ticker_symbols = [t + ".NS" for t in tickers]
-        batch_df = yf.download(ticker_symbols, period="1d", progress=False, timeout=10)
+        logging.info(f"⚡ Bulk Pre-Screen: Fetching current prices for {len(tickers)} tickers...")
+        close_prices = {}
         
-        if batch_df.empty:
-            return cache_df
-            
-        if isinstance(batch_df.columns, pd.MultiIndex):
-            close_prices = batch_df['Close'].iloc[-1]
+        # If kite client is available, use it (extremely fast & reliable)
+        if kite:
+            import kite_scanner
+            all_tickers = [f"NSE:{t}" for t in tickers]
+            quotes = kite_scanner.fetch_ohlc_safe(kite, all_tickers)
+            for t in tickers:
+                q = quotes.get(f"NSE:{t}")
+                if q:
+                    close_prices[t] = q['last_price']
+                else:
+                    q_alt = quotes.get(t)
+                    if q_alt:
+                        close_prices[t] = q_alt['last_price']
         else:
-            close_prices = batch_df['Close']
+            # Fallback to yfinance if running in demo/offline mode
+            ticker_symbols = [t + ".NS" for t in tickers]
+            batch_df = yf.download(ticker_symbols, period="1d", progress=False, timeout=10)
+            
+            if batch_df.empty:
+                return cache_df
+                
+            if isinstance(batch_df.columns, pd.MultiIndex):
+                y_closes = batch_df['Close'].iloc[-1]
+            else:
+                y_closes = batch_df['Close']
+                
+            for t in tickers:
+                sym = t + ".NS"
+                val = y_closes.get(sym)
+                if val is not None and not pd.isna(val):
+                    close_prices[t] = val
+                else:
+                    val_alt = y_closes.get(t)
+                    if val_alt is not None and not pd.isna(val_alt):
+                        close_prices[t] = val_alt
             
         active_candidates = []
         for _, row in cache_df.iterrows():
             ticker = row['Ticker']
-            symbol = ticker + ".NS"
-            ltp = close_prices.get(symbol)
+            ltp = close_prices.get(ticker)
             if ltp is None or pd.isna(ltp):
                 ltp = close_prices.get(ticker, row['Prev_Close'])
                 
@@ -466,7 +492,7 @@ def scan_bearish_vwap_rejections(kite, pullback_threshold=0.0015, use_demo=False
         logging.warning(f"Failed to fetch Nifty 50 trend: {ne}")
 
     universe_df = load_universe_data()
-    active_candidates = batch_pre_screen(universe_df)
+    active_candidates = batch_pre_screen(universe_df, kite=kite)
     if active_candidates.empty:
         return pd.DataFrame(), pd.DataFrame()
         

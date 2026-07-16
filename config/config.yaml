@@ -2,7 +2,7 @@ kite:
   api_key: "cl7wqm54xlvsva52"
   api_secret: "x4gfq71ek6twzdrr3fki3hpf71tvfahz"
 gemini:
-  api_key: "AQ.Ab8RN6IyPAvq-0VscihThiwa7EIOFyZcMZJ5RaEO2ZfDpLvzSA"
+  api_key: ""
 telegram:
   bot_token: "8741631027:AAGHs2efvOeQg9mTVBE2Oe8HNKbj0H7P1oQ"
   chat_id: "@SwingTradeIdeaNse500"

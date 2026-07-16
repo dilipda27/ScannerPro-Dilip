@@ -808,32 +808,7 @@ if active_tab == "💼 Intraday Paper Trades":
             portfolio_df_all = _cached_portfolio(st.session_state.kite_access_token)
         portfolio_df = portfolio_df_all[~portfolio_df_all['Strategy'].isin(['Option Desk', 'Rolling Straddle'])].copy() if not portfolio_df_all.empty else pd.DataFrame()
 
-        # --- PERIODIC TELEGRAM UPDATES (Every 10 Minutes) ---
-        if 'last_telegram_update' not in st.session_state:
-            st.session_state.last_telegram_update = datetime.datetime.now() - datetime.timedelta(minutes=11)
-
-        if datetime.datetime.now() - st.session_state.last_telegram_update >= datetime.timedelta(minutes=10):
-            now = datetime.datetime.now()
-            current_time = now.time()
-            start_time = datetime.time(9, 30)
-            end_time = datetime.time(14, 45)
-
-            # Check if there's at least one active trade
-            has_open_positions = not portfolio_df.empty and (portfolio_df['Status'] == 'Active').any()
-
-            if start_time <= current_time <= end_time and has_open_positions:
-                import telegram_agent
-                tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
-                # Prioritize personal private chat ID for P&L reports if configured
-                tel_chat_id = getattr(config, 'TELEGRAM_PERSONAL_CHAT_ID', '') or getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', getattr(config, 'TELEGRAM_CHAT_ID', ''))
-
-                if tel_token and tel_chat_id:
-                    if telegram_agent.send_portfolio_report(portfolio_df, tel_token, tel_chat_id):
-                        st.session_state.last_telegram_update = datetime.datetime.now()
-                        st.toast("📲 Sent periodic portfolio update to Telegram", icon="📊")
-            else:
-                # Reset the 10-minute timer if skipped to prevent redundant checks on every page interaction
-                st.session_state.last_telegram_update = datetime.datetime.now()
+        # Periodic P&L notifications are now handled in the background by the scheduler service.
 
         if not portfolio_df.empty:
             col1, col2 = st.columns([4, 1])
@@ -1675,6 +1650,7 @@ if st.session_state.get('kite_access_token'):
             "bullish_vwap_rejection": False,
             "bullish": False,
             "failed_breakout": False,
+            "morning_range": False,
             "vcp": False,
             "ai_advisor": False
         }
@@ -1695,6 +1671,7 @@ if st.session_state.get('kite_access_token'):
     if 'mon_bullish_vwap_rejection' not in st.session_state: st.session_state.mon_bullish_vwap_rejection = settings.get("bullish_vwap_rejection", False)
     if 'mon_bullish' not in st.session_state: st.session_state.mon_bullish = settings.get("bullish", False)
     if 'mon_failed_breakout' not in st.session_state: st.session_state.mon_failed_breakout = settings.get("failed_breakout", False)
+    if 'mon_morning_range' not in st.session_state: st.session_state.mon_morning_range = settings.get("morning_range", False)
     
     t_orb = st.sidebar.toggle("15-Min ORB Monitor", value=st.session_state.mon_orb)
     t_52w = st.sidebar.toggle("52-Week High Monitor", value=st.session_state.mon_52w)
@@ -1703,12 +1680,13 @@ if st.session_state.get('kite_access_token'):
     t_bullish_vwap = st.sidebar.toggle("Bullish VWAP Rejection Monitor", value=st.session_state.mon_bullish_vwap_rejection)
     t_bullish = st.sidebar.toggle("Bullish Breakout Monitor", value=st.session_state.mon_bullish)
     t_failed = st.sidebar.toggle("Failed Breakout Short Monitor", value=st.session_state.mon_failed_breakout)
+    t_morning = st.sidebar.toggle("Morning Range Monitor", value=st.session_state.mon_morning_range)
     
     # Save if modified
     if (t_orb != st.session_state.mon_orb or t_52w != st.session_state.mon_52w or 
         t_bearish != st.session_state.mon_bearish or t_vwap != st.session_state.mon_vwap_rejection or 
         t_bullish_vwap != st.session_state.mon_bullish_vwap_rejection or t_bullish != st.session_state.mon_bullish or 
-        t_failed != st.session_state.mon_failed_breakout):
+        t_failed != st.session_state.mon_failed_breakout or t_morning != st.session_state.mon_morning_range):
         
         st.session_state.mon_orb = t_orb
         st.session_state.mon_52w = t_52w
@@ -1717,6 +1695,7 @@ if st.session_state.get('kite_access_token'):
         st.session_state.mon_bullish_vwap_rejection = t_bullish_vwap
         st.session_state.mon_bullish = t_bullish
         st.session_state.mon_failed_breakout = t_failed
+        st.session_state.mon_morning_range = t_morning
         
         settings.update({
             "orb": t_orb,
@@ -1725,7 +1704,8 @@ if st.session_state.get('kite_access_token'):
             "vwap_rejection": t_vwap,
             "bullish_vwap_rejection": t_bullish_vwap,
             "bullish": t_bullish,
-            "failed_breakout": t_failed
+            "failed_breakout": t_failed,
+            "morning_range": t_morning
         })
         save_scheduler_settings(settings)
         st.rerun()
@@ -1788,7 +1768,7 @@ if st.session_state.get('kite_access_token'):
             st.sidebar.warning("⚠️ AI Advisor is active but currently outside market hours (9:45 AM - 2:45 PM Weekdays).")
     
     vcp_active = volatility_contraction_scanner.is_live_monitor_running()
-    if st.session_state.mon_orb or st.session_state.mon_52w or st.session_state.mon_bearish or st.session_state.mon_bullish or st.session_state.mon_vwap_rejection or st.session_state.mon_failed_breakout or vcp_active or ai_advisor_toggle:
+    if st.session_state.mon_orb or st.session_state.mon_52w or st.session_state.mon_bearish or st.session_state.mon_bullish or st.session_state.mon_vwap_rejection or st.session_state.mon_failed_breakout or st.session_state.mon_morning_range or vcp_active or ai_advisor_toggle:
         st.sidebar.success("Live Automation ACTIVE")
         if st.sidebar.button("⏹️ Stop All Monitors"):
             st.session_state.mon_orb = False
@@ -1797,6 +1777,7 @@ if st.session_state.get('kite_access_token'):
             st.session_state.mon_vwap_rejection = False
             st.session_state.mon_bullish = False
             st.session_state.mon_failed_breakout = False
+            st.session_state.mon_morning_range = False
             volatility_contraction_scanner.stop_live_monitor()
             ai_advisor.set_ai_advisor_enabled(False)
             st.session_state.last_ai_advisor_run = None
@@ -1809,6 +1790,7 @@ if st.session_state.get('kite_access_token'):
                 "bullish_vwap_rejection": False,
                 "bullish": False,
                 "failed_breakout": False,
+                "morning_range": False,
                 "vcp": False,
                 "ai_advisor": False
             })
