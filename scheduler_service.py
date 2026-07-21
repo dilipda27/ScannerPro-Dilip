@@ -25,6 +25,7 @@ import telegram_agent
 import image_generator
 import paper_trader
 import morning_range_scanner
+import top_gainers_losers_scanner
 
 # Setup logging
 root_logger = logging.getLogger()
@@ -74,12 +75,21 @@ def get_kite_instance():
         return None
 
 def is_market_open():
-    """Check if today is a weekday and current time is within market hours (9:15-14:45)."""
+    """Check if today is a weekday and current time is within market hours (9:15-14:00)."""
     now = datetime.datetime.now()
     if now.weekday() > 4: # Weekend
         return False
     market_start = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    market_end = now.replace(hour=14, minute=45, second=0, microsecond=0)
+    market_end = now.replace(hour=14, minute=0, second=0, microsecond=0)
+    return market_start <= now <= market_end
+
+def is_monitoring_open():
+    """Check if today is a weekday and current time is within portfolio monitoring hours (9:15-15:20)."""
+    now = datetime.datetime.now()
+    if now.weekday() > 4: # Weekend
+        return False
+    market_start = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_end = now.replace(hour=15, minute=20, second=0, microsecond=0)
     return market_start <= now <= market_end
 
 def run_automated_orb(scan_label):
@@ -658,6 +668,43 @@ def run_automated_morning_range():
     except Exception as e:
         logging.error(f"Error during automated Morning Range scan: {e}")
 
+def run_automated_gainers_losers():
+    """Run the Top Gainers/Losers consolidation breakout scanner automated."""
+    settings_file = os.path.join("data", "state", ".scheduler_settings.json")
+    enabled = True
+    if os.path.exists(settings_file):
+        try:
+            with open(settings_file, "r") as f:
+                settings = json.load(f)
+                enabled = settings.get("gainers_losers", True)
+        except:
+            pass
+    if not enabled:
+        return
+        
+    if not is_market_open():
+        return
+        
+    # Only run after 9:30 AM
+    now = datetime.datetime.now()
+    if now.hour < 9 or (now.hour == 9 and now.minute < 30):
+        return
+        
+    logging.info("📡 Running Automated Top Gainers & Losers Scan...")
+    kite = get_kite_instance()
+    if not kite:
+        return
+        
+    try:
+        # Build watchlist if not present
+        watchlist = top_gainers_losers_scanner.load_watchlist()
+        if not watchlist:
+            top_gainers_losers_scanner.build_gainers_losers_watchlist(kite)
+            
+        top_gainers_losers_scanner.scan_gainers_losers(kite)
+    except Exception as e:
+        logging.error(f"Error during automated gainers/losers scan: {e}")
+
 def run_morning_cache():
     """Pre-calculate data for both scanners and archive yesterday's history at 9:05 AM."""
     if datetime.datetime.today().weekday() > 4:
@@ -732,15 +779,15 @@ def run_auto_square_off():
             )
             
             if not is_option:
-                active_intraday.append(ticker)
+                active_intraday.append((ticker, row['EntryTime']))
 
         if not active_intraday:
             logging.info("No active intraday equity trades to square off.")
             return
 
-        for ticker in active_intraday:
-            logging.info(f"Auto-squaring off intraday equity position: {ticker}")
-            paper_trader.exit_trade(ticker, kite)
+        for ticker, entry_time in active_intraday:
+            logging.info(f"Auto-squaring off intraday equity position: {ticker} (Entry: {entry_time})")
+            paper_trader.exit_trade(ticker, kite, entry_time=entry_time)
             
         logging.info(f"✅ Successfully squared off {len(active_intraday)} intraday equity trades.")
     except Exception as e:
@@ -1048,32 +1095,15 @@ def run_automated_315_swing():
         logging.error("Failed to get Kite client for 3:15 PM Swing setup.")
         return
 
-    gemini_key = getattr(config, 'GEMINI_API_KEY', '')
-    if not gemini_key:
-        logging.error("AI Advisor: GEMINI_API_KEY is not configured in config.py.")
-        return
-
     try:
         # 1. Scan for candidates
         results_df = kite_scanner.scan_315_setups(kite)
         if results_df.empty:
             logging.info("No swing candidates found today.")
         else:
-            # 2. Run AI Advisor Conviction picks
-            import ai_advisor
-            ai_opinion = ai_advisor.analyze_stocks(results_df, gemini_key, strategy_name="3:15 PM Swing Setup")
-            logging.info(f"AI Opinion received:\n{ai_opinion}")
-            
-            # 3. Extract finalized tickers
-            candidates_tickers = results_df['Ticker'].tolist()
-            finalized_tickers = []
-            for ticker in candidates_tickers:
-                for line in ai_opinion.split('\n'):
-                    if "Pick" in line and ticker.upper() in line.upper():
-                        finalized_tickers.append(ticker)
-                        break
-                        
-            logging.info(f"Finalized Swing Tickers: {finalized_tickers}")
+            # 2. Bypass AI Advisor filtering (AI feature is disabled)
+            finalized_tickers = results_df['Ticker'].tolist()
+            logging.info(f"Finalized Swing Tickers (Bypassed AI filter): {finalized_tickers}")
             
             # 4. Execute Swing Trades
             import paper_trader
@@ -1138,13 +1168,42 @@ schedule.every(10).minutes.do(run_periodic_pnl_report)
 # 3:20 PM IST - Auto Square-off
 schedule.every().day.at("15:20").do(run_auto_square_off)
 
-logging.info("🕰️ Scheduler Service Started. Monitoring slots, AI position analysis, and 3:20 PM Square-off...")
+# 9:30 AM IST - Top Gainers & Losers Watchlist Build / Initial Scan
+schedule.every().day.at("09:30").do(run_automated_gainers_losers)
+
+def is_pid_running(pid):
+    """Check if a process with the given PID is running (Windows tasklist check)."""
+    try:
+        import subprocess
+        output = subprocess.check_output(f'tasklist /FI "PID eq {pid}"', shell=True).decode('utf-8')
+        return "No tasks" not in output and str(pid) in output
+    except Exception:
+        return False
+
+logging.info("🕰️ Scheduler Service Starting. Monitoring slots, AI position analysis, and 3:20 PM Square-off...")
 
 if __name__ == "__main__":
     pid_file = os.path.join("data", "state", ".scheduler.pid")
     os.makedirs(os.path.dirname(pid_file), exist_ok=True)
+    
+    # 1. Prevent duplicate instances
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, "r") as f:
+                old_pid = int(f.read().strip())
+            if is_pid_running(old_pid):
+                import sys
+                logging.error(f"🛑 Duplicate Scheduler Blocked: An instance of the scheduler is already running with PID {old_pid}.")
+                sys.exit(1)
+        except SystemExit:
+            raise
+        except Exception as e:
+            logging.warning(f"Failed to read/validate existing PID file: {e}")
+            
     with open(pid_file, "w") as f:
         f.write(str(os.getpid()))
+        
+    logging.info(f"🕰️ Scheduler Service Started (PID: {os.getpid()}). Monitoring slots, AI position analysis, and 3:20 PM Square-off...")
         
     try:
         while True:
@@ -1153,8 +1212,11 @@ if __name__ == "__main__":
             except Exception as e:
                 logging.error(f"Scheduler loop error: {e}")
             
-            # If market is open, run intraday scanners continuously
-            if is_market_open():
+            entry_open = is_market_open()
+            monitoring_open = is_monitoring_open()
+            
+            # If entry window is open, run intraday scanners continuously
+            if entry_open:
                 try:
                     run_automated_52wh()
                 except Exception as e:
@@ -1190,10 +1252,25 @@ if __name__ == "__main__":
                 except Exception as e:
                     logging.error(f"Continuous loop - Morning Range error: {e}")
                 
-                # Sleep a short duration when market is open to prevent overloading
+                try:
+                    run_automated_gainers_losers()
+                except Exception as e:
+                    logging.error(f"Continuous loop - Gainers/Losers error: {e}")
+            
+            # Continuous Stop-Loss / Target portfolio monitoring (5-second intervals)
+            if monitoring_open:
+                try:
+                    kite = get_kite_instance()
+                    if kite:
+                        import paper_trader
+                        paper_trader.update_portfolio_pnl(kite)
+                except Exception as pnl_err:
+                    logging.error(f"Continuous loop - Portfolio PnL update error: {pnl_err}")
+                    
+            # Sleep duration adjustment
+            if monitoring_open:
                 time.sleep(5)
             else:
-                # Sleep longer (30 seconds) outside market hours to save resources
                 time.sleep(30)
     finally:
         if os.path.exists(pid_file):

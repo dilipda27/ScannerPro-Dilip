@@ -24,7 +24,9 @@ if os.path.exists(CONFIG_PATH):
         if _cfg:
             KITE_API_KEY = _cfg.get("kite", {}).get("api_key", KITE_API_KEY)
             KITE_API_SECRET = _cfg.get("kite", {}).get("api_secret", KITE_API_SECRET)
-            GEMINI_API_KEY = _cfg.get("gemini", {}).get("api_key", GEMINI_API_KEY)
+            gemini_val = _cfg.get("gemini", {}).get("api_key")
+            if gemini_val:
+                GEMINI_API_KEY = gemini_val
             
             _tel = _cfg.get("telegram", {})
             TELEGRAM_BOT_TOKEN = _tel.get("bot_token", TELEGRAM_BOT_TOKEN)
@@ -55,3 +57,27 @@ try:
     LOT_SIZE_SENSEX = int(os.environ.get("LOT_SIZE_SENSEX", LOT_SIZE_SENSEX))
 except Exception:
     pass
+
+def save_gemini_key(key: str) -> bool:
+    """Saves the Gemini API key back to config/config.yaml."""
+    import yaml
+    config_path = os.path.join("config", "config.yaml")
+    cfg = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r") as f:
+                cfg = yaml.safe_load(f) or {}
+        except Exception:
+            pass
+    if "gemini" not in cfg:
+        cfg["gemini"] = {}
+    cfg["gemini"]["api_key"] = key
+    try:
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        with open(config_path, "w") as f:
+            yaml.dump(cfg, f, default_flow_style=False)
+        return True
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to save Gemini key to config.yaml: {e}")
+        return False

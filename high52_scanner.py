@@ -173,12 +173,12 @@ def scan_52w_breakouts(kite, progress_callback=None, only_closed_candles=True):
     now = datetime.datetime.now()
     current_time = now.time()
     
-    # Time Filter: 09:45 AM to 02:45 PM
+    # Time Filter: 09:45 AM to 02:00 PM
     start_time = datetime.time(9, 45)
-    end_time = datetime.time(14, 45)
+    end_time = datetime.time(14, 0)
     
     if not (start_time <= current_time <= end_time):
-        logging.warning(f"Scanner idle. Current time {current_time} is outside the 09:45-14:45 window.")
+        logging.warning(f"Scanner idle. Current time {current_time} is outside the 09:45-14:00 window.")
         # We still continue for testing if needed, but in production this would return empty
         # return pd.DataFrame()
     

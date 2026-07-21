@@ -221,7 +221,7 @@ def calculate_wilders_atr(df, period=14):
 # STAGE 1: END-OF-DAY (EOD) PROXIMITY FILTER
 # ==============================================================================
 
-def run_stage1_proximity_filter(kite, symbols_list):
+def run_stage1_proximity_filter(kite, symbols_list, progress_callback=None):
     """
     Stage 1: Filters the Nifty 500 universe for liquid stocks trading within 
     3% of their 20-day high or 20-day low.
@@ -245,7 +245,9 @@ def run_stage1_proximity_filter(kite, symbols_list):
 
     for symbol, token in token_map.items():
         processed += 1
-        if processed % 50 == 0 or processed == total:
+        if progress_callback:
+            progress_callback(processed, total, symbol)
+        elif processed % 50 == 0 or processed == total:
             logging.info(f"Progress: Processed {processed}/{total} stocks...")
 
         # Rate limiting: Kite API limit is 3 requests per second.
@@ -335,7 +337,7 @@ def run_stage1_proximity_filter(kite, symbols_list):
 # STAGE 2: SETUP VALIDATION (VOLATILITY CONTRACTION)
 # ==============================================================================
 
-def run_stage2_setup_validation(kite):
+def run_stage2_setup_validation(kite, progress_callback=None):
     """
     Stage 2: Loads EOD proximity filter cached stocks, fetches daily candles,
     calculates Wilder's ATR over 5 and 14 days, and filters for volatility contraction.
@@ -364,11 +366,17 @@ def run_stage2_setup_validation(kite):
     # Fetch 50 daily candles to ensure sufficient history for 14-day Wilder's ATR
     from_date = to_date - datetime.timedelta(days=90)
     
-    logging.info(f"🔍 Validating {len(shortlist_cache)} candidates for recent Volatility Contraction...")
+    total = len(shortlist_cache)
+    processed = 0
+    logging.info(f"🔍 Validating {total} candidates for recent Volatility Contraction...")
 
     for token_str, metadata in shortlist_cache.items():
+        processed += 1
         token = int(token_str)
         symbol = metadata["symbol"]
+        
+        if progress_callback:
+            progress_callback(processed, total, symbol)
         
         # Enforce REST API rate limits
         time.sleep(0.35)
@@ -560,9 +568,9 @@ class IntradayLiveMonitor:
 
     def on_ticks(self, ws, ticks):
         """WebSocket on_ticks callback. Evaluates real-time price updates against levels."""
-        # Enforce market hours: 09:30 AM to 02:45 PM (14:45)
+        # Enforce market hours: 09:30 AM to 02:00 PM (14:00)
         current_time = datetime.datetime.now().time()
-        if not (datetime.time(9, 30) <= current_time <= datetime.time(14, 45)):
+        if not (datetime.time(9, 30) <= current_time <= datetime.time(14, 0)):
             return
 
         with self._lock:

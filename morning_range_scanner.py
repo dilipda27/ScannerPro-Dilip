@@ -64,15 +64,18 @@ def save_notified(notified_set):
         logging.error(f"Error saving morning range notified list: {e}")
 
 def calculate_vwap(df):
-    tp = (df['high'] + df['low'] + df['close']) / 3
-    tpv = tp * df['volume']
-    cum_tpv = tpv.cumsum()
-    cum_vol = df['volume'].cumsum()
+    df_copy = df.copy()
+    # Normalize index date if timezone aware
+    df_copy['date_group'] = df_copy.index.date
+    tp = (df_copy['high'] + df_copy['low'] + df_copy['close']) / 3
+    tpv = tp * df_copy['volume']
+    cum_tpv = tpv.groupby(df_copy['date_group']).cumsum()
+    cum_vol = df_copy['volume'].groupby(df_copy['date_group']).cumsum()
     return cum_tpv / cum_vol
 
 def build_morning_watchlist(kite):
-    """Fetches morning range (09:15 - 09:45 AM) for all F&O stocks and builds the watchlist."""
-    logging.info("Building 9:45 AM Morning Range Watchlist...")
+    """Fetches morning range (09:15 - 09:45 AM) and EOD indicators for all F&O stocks and builds the watchlist."""
+    logging.info("Building 9:45 AM Morning Range Watchlist with EOD Trend Indicators...")
     
     try:
         fno_symbols = list(kite_scanner.get_nifty500_fno_symbols())
@@ -97,6 +100,21 @@ def build_morning_watchlist(kite):
             if not token:
                 return None
             try:
+                # 1. Fetch daily data for EOD Trend (50 EMA) & Volatility (14 ATR)
+                from_date_daily = today - datetime.timedelta(days=100)
+                df_daily = kite_scanner.fetch_kite_data(kite, int(token), from_date_daily, today, "day")
+                if df_daily.empty or len(df_daily) < 50:
+                    return None
+                    
+                import pandas_ta as ta
+                df_daily.ta.ema(length=50, append=True)
+                df_daily.ta.atr(length=14, append=True)
+                
+                latest_daily = df_daily.iloc[-1]
+                daily_50_ema = float(latest_daily['EMA_50'])
+                daily_atr_14 = float(latest_daily['ATRr_14'])
+                
+                # 2. Fetch morning range 5-min data
                 df = kite_scanner.fetch_kite_data(kite, int(token), start_time, end_time, "5minute")
                 if df.empty or len(df) < 6:
                     return None
@@ -126,7 +144,9 @@ def build_morning_watchlist(kite):
                         "open_915": float(open_915),
                         "high_945": float(high_945),
                         "low_945": float(low_945),
-                        "classification": classification
+                        "classification": classification,
+                        "daily_50_ema": daily_50_ema,
+                        "daily_atr_14": daily_atr_14
                     }
             except Exception as e:
                 logging.debug(f"Error processing {symbol}: {e}")
@@ -148,20 +168,42 @@ def build_morning_watchlist(kite):
         return {}
 
 def check_nifty_trend(kite):
-    """Returns 'BULLISH', 'BEARISH', or 'NEUTRAL' based on Nifty 50 price vs open today."""
+    """Returns 'BULLISH', 'BEARISH', or 'NEUTRAL' based on Nifty 50 5m VWAP & 20 EMA alignment."""
     try:
         nifty_token_map = kite_scanner.get_kite_instruments(kite, ["NIFTY 50"])
         if nifty_token_map and "NIFTY 50" in nifty_token_map:
             nifty_token = nifty_token_map["NIFTY 50"]
             today = datetime.datetime.now()
-            nifty_from = today.replace(hour=9, minute=15, second=0, microsecond=0)
+            # Fetch last 3 days of 5-minute data to ensure EMA-20 is populated cleanly
+            nifty_from = today - datetime.timedelta(days=3)
             nifty_df = kite_scanner.fetch_kite_data(kite, nifty_token, nifty_from, today, "5minute")
-            if not nifty_df.empty:
-                nifty_open = nifty_df.iloc[0]['open']
-                nifty_ltp = nifty_df.iloc[-1]['close']
-                nifty_bullish = nifty_ltp > nifty_open
-                logging.info(f"Broad Market Check -> Nifty Open: {nifty_open:.2f}, LTP: {nifty_ltp:.2f} | Bullish? {nifty_bullish}")
-                return "BULLISH" if nifty_bullish else "BEARISH"
+            
+            if not nifty_df.empty and len(nifty_df) >= 20:
+                nifty_df.columns = [c.lower() for c in nifty_df.columns]
+                
+                import pandas_ta as ta
+                nifty_df.ta.ema(length=20, append=True)
+                
+                latest = nifty_df.iloc[-1]
+                nifty_ltp = latest['close']
+                nifty_ema = latest['EMA_20']
+                
+                # Check relation to open of today
+                today_rows = nifty_df[nifty_df.index.date == today.date()]
+                nifty_open = today_rows.iloc[0]['open'] if not today_rows.empty else nifty_ltp
+                
+                # Introduce a 0.10% buffer zone around open (approx. 24 points)
+                nifty_change_pct = (nifty_ltp - nifty_open) / nifty_open
+                buffer = 0.0010
+                
+                is_bullish = nifty_ltp > nifty_ema and nifty_change_pct > buffer
+                is_bearish = nifty_ltp < nifty_ema and nifty_change_pct < -buffer
+                
+                logging.info(f"Broad Market Check -> Nifty LTP: {nifty_ltp:.2f} | Open: {nifty_open:.2f} | 20 EMA: {nifty_ema:.2f} | Change %: {nifty_change_pct*100:.3f}% | Trend: {'BULLISH' if is_bullish else 'BEARISH' if is_bearish else 'NEUTRAL'}")
+                if is_bullish:
+                    return "BULLISH"
+                elif is_bearish:
+                    return "BEARISH"
     except Exception as e:
         logging.warning(f"Failed to check Nifty 50 trend: {e}")
     return "NEUTRAL"
@@ -240,6 +282,46 @@ def scan_morning_range(kite):
                 avg_volume = prev_candles['volume'].mean()
                 latest_volume = latest_candle['volume']
                 volume_ratio = latest_volume / avg_volume if avg_volume > 0 else 1.0
+
+            # --- OPTIMIZATION FILTERS ---
+            daily_50_ema = info.get("daily_50_ema")
+            daily_atr_14 = info.get("daily_atr_14")
+            
+            # 1. Daily 50 EMA trend filter
+            if daily_50_ema:
+                if info["classification"] == "STRONG" and current_price < daily_50_ema:
+                    return None
+                if info["classification"] == "WEAK" and current_price > daily_50_ema:
+                    return None
+
+            # 2. Daily ATR Exhaustion check (85%)
+            today_high = df['high'].max()
+            today_low = df['low'].min()
+            today_range = today_high - today_low
+            if daily_atr_14 and today_range > 0.85 * daily_atr_14:
+                return None
+
+            # 3. Breakout Candle Body Quality check (70% body close)
+            c_high = latest_candle['high']
+            c_low = latest_candle['low']
+            c_range = c_high - c_low
+            if c_range > 0:
+                if info["classification"] == "STRONG":
+                    body_ratio = (candle_close_5m - c_low) / c_range
+                    if body_ratio < 0.70:
+                        return None
+                elif info["classification"] == "WEAK":
+                    body_ratio = (c_high - candle_close_5m) / c_range
+                    if body_ratio < 0.70:
+                        return None
+
+            # 4. Overextension Check (Closeness to VWAP within 1.2%)
+            if info["classification"] == "STRONG":
+                if current_price > current_vwap * 1.012:
+                    return None
+            elif info["classification"] == "WEAK":
+                if current_price < current_vwap * 0.988:
+                    return None
 
             # LONG TRIGGER (STRONG)
             if info["classification"] == "STRONG":

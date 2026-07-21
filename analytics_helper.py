@@ -171,7 +171,7 @@ def load_and_normalize_archived_trades():
 
 def render_analytics_tab(portfolio_df=None):
     st.markdown("<h2 style='color:#3b82f6; font-family:\"Plus Jakarta Sans\", sans-serif; font-weight:700;'>📊 Performance & Portfolio Analytics</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color:#64748b; font-size:0.95rem; margin-top:-10px; margin-bottom:25px;'>Professional-grade quantitative analytics and trade visualization desk.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:var(--text-color); opacity:0.7; font-size:0.95rem; margin-top:-10px; margin-bottom:25px;'>Professional-grade quantitative analytics and trade visualization desk.</p>", unsafe_allow_html=True)
     
     # Load normalized trades
     all_trades_df = load_and_normalize_archived_trades()

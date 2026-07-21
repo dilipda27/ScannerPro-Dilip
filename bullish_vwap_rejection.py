@@ -213,6 +213,7 @@ def run_rejection_scanner(df, pdc, yesterday_high=None, nifty_bearish=False):
     # 2. Vectorized Indicators
     df_session['vwap'] = calculate_vwap(df_session)
     df_session['ema_9'] = calculate_ema(df_session['close'], span=9)
+    df_session['ema_20'] = calculate_ema(df_session['close'], span=20)
     df_session['vol_ma20'] = df_session['volume'].rolling(window=20).mean()
     df_session['rsi_5m'] = calculate_rsi(df_session['close'], period=14)
     
@@ -235,7 +236,9 @@ def run_rejection_scanner(df, pdc, yesterday_high=None, nifty_bearish=False):
     
     df_session['trend_ok'] = (df_session['close'] > df_session['vwap']) & \
                              (df_session['vwap'] > pdc) & \
-                             (df_session['vwap_sloping_up'])
+                             (df_session['vwap_sloping_up']) & \
+                             (df_session['close'] > df_session['ema_20']) & \
+                             (df_session['ema_9'] > df_session['ema_20'])
     
     # 5. Resistance / VWAP Breakout checks
     or_high = df_session['high'].iloc[0:3].max() if len(df_session) >= 3 else df_session['high'].iloc[0]
@@ -275,7 +278,10 @@ def run_rejection_scanner(df, pdc, yesterday_high=None, nifty_bearish=False):
     df_session['candle_ok'] = (df_session['close'] > (df_session['low'] + 0.6 * candle_range)) & (candle_range > 0)
     
     # Volume Filter: Rejection candle volume must confirm institutional activity
-    df_session['vol_ok'] = df_session['volume'] > df_session['vol_ma20'] * 0.8
+    df_session['vol_ok'] = df_session['volume'] > df_session['vol_ma20'] * 1.2
+    
+    # Broad market Nifty filter
+    df_session['nifty_ok'] = not nifty_bearish
     
     df_session['trigger_signal'] = (
         df_session['trend_ok'] & 
@@ -287,7 +293,8 @@ def run_rejection_scanner(df, pdc, yesterday_high=None, nifty_bearish=False):
         df_session['vol_ok'] &
         df_session['not_extended'] &
         df_session['not_chasing'] &
-        df_session['candle_ok']
+        df_session['candle_ok'] &
+        df_session['nifty_ok']
     )
     
     alerts = []
@@ -486,8 +493,9 @@ def scan_bullish_vwap_rejections(kite, use_demo=False):
                 if not nifty_df.empty:
                     nifty_open = nifty_df.iloc[0]['open']
                     nifty_ltp = nifty_df.iloc[-1]['close']
-                    nifty_bearish = nifty_ltp < nifty_open
-                    logging.info(f"Broad Market Check -> Nifty Open: {nifty_open:.2f}, LTP: {nifty_ltp:.2f} | Bearish? {nifty_bearish}")
+                    nifty_change_pct = (nifty_ltp - nifty_open) / nifty_open
+                    nifty_bearish = nifty_change_pct < -0.0010
+                    logging.info(f"Broad Market Check -> Nifty Open: {nifty_open:.2f}, LTP: {nifty_ltp:.2f} | Change %: {nifty_change_pct*100:.3f}% | Bearish? {nifty_bearish}")
     except Exception as ne:
         logging.warning(f"Failed to fetch Nifty 50 trend: {ne}")
 

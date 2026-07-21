@@ -65,6 +65,18 @@ class IntradayCacheService:
         self.log(f"🔄 Executing: {task_id}...")
         self.current_task = task_id
         
+        # Inline progress callback to output real-time terminal progress
+        def cb(processed, total, symbol):
+            pct = (processed / total) * 100 if total > 0 else 0
+            sys.stdout.write(f"\r[Cache Progress] {processed}/{total} ({pct:.1f}%) | Processing: {symbol:<10}")
+            sys.stdout.flush()
+            if processed == total:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            # Log to internal list less frequently to prevent memory/log bloat
+            if processed % 10 == 0 or processed == total:
+                self.log(f"Progress: {processed}/{total} ({pct:.1f}%) | Last: {symbol}")
+
         try:
             if task_id == "archive":
                 import paper_trader
@@ -73,44 +85,44 @@ class IntradayCacheService:
                 
             elif task_id == "unified_morning":
                 import kite_scanner
-                kite_scanner.run_unified_morning_cache(kite)
+                kite_scanner.run_unified_morning_cache(kite, progress_callback=cb)
                 self.log("✅ Unified Morning Cache complete.")
                 
             elif task_id == "bullish_strength":
                 import bullish_breakout_scanner
-                bullish_breakout_scanner.cache_bullish_candidates(kite, refresh_only=False)
+                bullish_breakout_scanner.cache_bullish_candidates(kite, progress_callback=cb, refresh_only=False)
                 self.log("✅ Full F&O Strength Cache complete.")
                 
             elif task_id == "bearish_breakdown":
                 import bearish_breakdown_scanner
-                bearish_breakdown_scanner.cache_bearish_candidates(kite, refresh_only=False)
+                bearish_breakdown_scanner.cache_bearish_candidates(kite, progress_callback=cb, refresh_only=False)
                 self.log("✅ Full Bearish Breakdown Cache complete.")
                 
             elif task_id == "vcp_caching":
                 import volatility_contraction_scanner
                 symbols = volatility_contraction_scanner.fetch_nifty500_symbols()
-                volatility_contraction_scanner.run_stage1_proximity_filter(kite, symbols)
-                volatility_contraction_scanner.run_stage2_setup_validation(kite)
+                volatility_contraction_scanner.run_stage1_proximity_filter(kite, symbols, progress_callback=cb)
+                volatility_contraction_scanner.run_stage2_setup_validation(kite, progress_callback=cb)
                 self.log("✅ VCP Stage 1 & Stage 2 Cache complete.")
                 
             elif task_id == "refresh_orb":
                 import kite_scanner
-                kite_scanner.cache_orb_stocks(kite, refresh_shortlist_only=True)
+                kite_scanner.cache_orb_stocks(kite, progress_callback=cb, refresh_shortlist_only=True)
                 self.log("✅ ORB Cache refreshed with today's open.")
                 
             elif task_id == "refresh_bullish":
                 import bullish_breakout_scanner
-                bullish_breakout_scanner.cache_bullish_candidates(kite, refresh_only=True)
+                bullish_breakout_scanner.cache_bullish_candidates(kite, progress_callback=cb, refresh_only=True)
                 self.log("✅ Bullish Breakout Cache refreshed.")
                 
             elif task_id == "refresh_bearish":
                 import bearish_breakdown_scanner
-                bearish_breakdown_scanner.cache_bearish_candidates(kite, refresh_only=True)
+                bearish_breakdown_scanner.cache_bearish_candidates(kite, progress_callback=cb, refresh_only=True)
                 self.log("✅ Bearish Breakdown Cache refreshed.")
                 
             elif task_id == "refresh_failed":
                 import failed_breakout_scanner
-                failed_breakout_scanner.cache_failed_candidates(kite, refresh_only=True)
+                failed_breakout_scanner.cache_failed_candidates(kite, progress_callback=cb, refresh_only=True)
                 self.log("✅ Failed Breakout Cache refreshed.")
                 
             self.completed_tasks.add(task_id)

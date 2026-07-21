@@ -76,16 +76,16 @@ st.markdown("""
     }
     
     .main {
-        background-color: #f8fafc;
+        background-color: var(--background-color);
     }
     
     /* Global Card Style */
     .stMetric {
-        background-color: white;
+        background-color: var(--secondary-background-color) !important;
         padding: 20px !important;
         border-radius: 12px;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        border: 1px solid #e2e8f0;
+        border: 1px solid rgba(128, 128, 128, 0.2) !important;
     }
     
     /* Header Styling */
@@ -100,10 +100,11 @@ st.markdown("""
     
     /* Portfolio Card */
     .portfolio-card {
-        background: white;
+        background: var(--secondary-background-color);
+        color: var(--text-color);
         padding: 25px;
         border-radius: 16px;
-        border: 1px solid #e2e8f0;
+        border: 1px solid rgba(128, 128, 128, 0.2);
         margin-bottom: 25px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.05);
     }
@@ -152,6 +153,7 @@ st.markdown("""
         padding: 0 !important;
         box-shadow: none !important;
         margin: 0 !important;
+        color: var(--text-color) !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -260,7 +262,7 @@ def show_help_dialog():
 # --- MAIN APP TABS ---
 
 # --- SIDEBAR NAVIGATION ---
-nav_options = ["🔍 Scanners", "💼 Intraday Paper Trades", "📊 Swing Trades", "📈 Option Desk", "📊 Performance Analytics", "📉 Backtesting"]
+nav_options = ["🔍 Scanners", "🔥 Gainer/Loser Watchlist", "💼 Intraday Paper Trades", "📊 Swing Trades", "📈 Option Desk", "📊 Performance Analytics", "📉 Backtesting"]
 active_tab = st.sidebar.radio("Navigation Menu", nav_options, key="active_tab")
 
 
@@ -368,10 +370,10 @@ if active_tab == "📈 Option Desk":
             status_text_od = "RUNNING" if is_running_od else "STOPPED"
 
             st.markdown(f"""
-            <div style="background: white; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; border-left: 5px solid {status_color_od}; margin-bottom: 20px;">
-                <div style="font-weight: 600; font-size: 0.9rem; color: #64748b;">Strategy Status: <span style="color: {status_color_od}; font-weight: 700;">{status_text_od}</span></div>
-                <div style="font-size: 1.1rem; font-weight: bold; color: #1e293b; margin-top: 5px;">{state_od.get('status_message', 'Not running')}</div>
-                <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 5px;">Last Update: {state_od.get('last_update', 'N/A')}</div>
+            <div style="background: var(--secondary-background-color); padding: 15px; border-radius: 8px; border: 1px solid rgba(128, 128, 128, 0.2); border-left: 5px solid {status_color_od}; margin-bottom: 20px;">
+                <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-color); opacity: 0.8;">Strategy Status: <span style="color: {status_color_od}; font-weight: 700;">{status_text_od}</span></div>
+                <div style="font-size: 1.1rem; font-weight: bold; color: var(--text-color); margin-top: 5px;">{state_od.get('status_message', 'Not running')}</div>
+                <div style="font-size: 0.75rem; color: var(--text-color); opacity: 0.6; margin-top: 5px;">Last Update: {state_od.get('last_update', 'N/A')}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -469,10 +471,10 @@ if active_tab == "📈 Option Desk":
             status_text = "RUNNING" if is_running else "STOPPED"
 
             st.markdown(f"""
-            <div style="background: white; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; border-left: 5px solid {status_color}; margin-bottom: 20px;">
-                <div style="font-weight: 600; font-size: 0.9rem; color: #64748b;">Strategy Status: <span style="color: {status_color}; font-weight: 700;">{status_text}</span></div>
-                <div style="font-size: 1.1rem; font-weight: bold; color: #1e293b; margin-top: 5px;">{state.get('status_message', 'Not running')}</div>
-                <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 5px;">Last Update: {state.get('last_update', 'N/A')}</div>
+            <div style="background: var(--secondary-background-color); padding: 15px; border-radius: 8px; border: 1px solid rgba(128, 128, 128, 0.2); border-left: 5px solid {status_color}; margin-bottom: 20px;">
+                <div style="font-weight: 600; font-size: 0.9rem; color: var(--text-color); opacity: 0.8;">Strategy Status: <span style="color: {status_color}; font-weight: 700;">{status_text}</span></div>
+                <div style="font-size: 1.1rem; font-weight: bold; color: var(--text-color); margin-top: 5px;">{state.get('status_message', 'Not running')}</div>
+                <div style="font-size: 0.75rem; color: var(--text-color); opacity: 0.6; margin-top: 5px;">Last Update: {state.get('last_update', 'N/A')}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -798,6 +800,197 @@ if active_tab == "📊 Performance Analytics":
     import analytics_helper
     analytics_helper.render_analytics_tab()
 
+if active_tab == "🔥 Gainer/Loser Watchlist":
+    st.markdown("""
+        <div class="header-container">
+            <h1 style='margin:0; font-size: 2rem; font-weight:700;'>🔥 Top Gainers & Losers Watchlist</h1>
+            <p style='margin:5px 0 0 0; opacity: 0.8;'>Consolidation Breakout Strategy Dashboard</p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Quick action menu
+    cols_qa = st.columns([0.8, 0.2])
+    with cols_qa[1]:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.rerun()
+
+    if not st.session_state.get('kite_access_token'):
+        st.warning("🔒 Please authenticate with Kite Connect in the sidebar to load real-time charts.")
+    else:
+        import top_gainers_losers_scanner
+        watchlist = top_gainers_losers_scanner.load_watchlist()
+        
+        if not watchlist:
+            st.info("ℹ️ The watchlist is empty or has not been built today yet. It is generated automatically at 9:30 AM.")
+            if st.button("⚡ Build Watchlist Now"):
+                kite = KiteConnect(api_key=config.KITE_API_KEY)
+                kite.set_access_token(st.session_state.kite_access_token)
+                with st.spinner("Building watchlist..."):
+                    watchlist = top_gainers_losers_scanner.build_gainers_losers_watchlist(kite)
+                    st.success("Watchlist built successfully!")
+                    st.rerun()
+        else:
+            kite = KiteConnect(api_key=config.KITE_API_KEY)
+            kite.set_access_token(st.session_state.kite_access_token)
+            
+            # Fetch current prices (LTP) in a batch to optimize speed
+            tickers_list = [f"NSE:{s}" for s in watchlist.keys()]
+            try:
+                ltp_data = kite.ltp(tickers_list)
+            except Exception:
+                ltp_data = {}
+                
+            # Load active and historical portfolios to check entry price
+            port_df = paper_trader.get_portfolio()
+            hist_file = paper_trader.HISTORY_FILE
+            hist_df = pd.read_csv(hist_file) if os.path.exists(hist_file) else pd.DataFrame()
+            
+            def get_trade_details(symbol):
+                # Check active
+                if not port_df.empty:
+                    match = port_df[(port_df['Ticker'] == symbol) & (port_df['Strategy'] == 'Gainer/Loser Breakout')]
+                    if not match.empty:
+                        return f"₹{match.iloc[0]['EntryPrice']:.2f}"
+                # Check historical
+                if not hist_df.empty:
+                    match = hist_df[(hist_df['Ticker'] == symbol) & (hist_df['Strategy'] == 'Gainer/Loser Breakout')]
+                    if not match.empty:
+                        return f"₹{match.iloc[0]['EntryPrice']:.2f}"
+                return "-"
+
+            gainers = {s: info for s, info in watchlist.items() if info["type"] == "GAINER"}
+            losers = {s: info for s, info in watchlist.items() if info["type"] == "LOSER"}
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("### 🚀 Top 5 Gainers (Long Watch)")
+                g_data = []
+                for s, info in gainers.items():
+                    cur_p = ltp_data.get(f"NSE:{s}", {}).get("last_price", 0.0)
+                    g_data.append({
+                        "Ticker": s,
+                        "9:30 AM %": f"{info['pct_change_930']:.2f}%",
+                        "Current Price": f"₹{cur_p:.2f}" if cur_p > 0 else "-",
+                        "Entry Price": get_trade_details(s)
+                    })
+                g_df = pd.DataFrame(g_data)
+                if not g_df.empty:
+                    st.dataframe(g_df, use_container_width=True, hide_index=True)
+            with col2:
+                st.markdown("### 💥 Top 5 Losers (Short Watch)")
+                l_data = []
+                for s, info in losers.items():
+                    cur_p = ltp_data.get(f"NSE:{s}", {}).get("last_price", 0.0)
+                    l_data.append({
+                        "Ticker": s,
+                        "9:30 AM %": f"{info['pct_change_930']:.2f}%",
+                        "Current Price": f"₹{cur_p:.2f}" if cur_p > 0 else "-",
+                        "Entry Price": get_trade_details(s)
+                    })
+                l_df = pd.DataFrame(l_data)
+                if not l_df.empty:
+                    st.dataframe(l_df, use_container_width=True, hide_index=True)
+            
+            st.markdown("---")
+            st.markdown("### 📊 Intraday Price & Consolidation Charts")
+            
+            grid_cols = st.columns(2)
+            notified = top_gainers_losers_scanner.load_notified()
+            start_of_day = datetime.datetime.now().replace(hour=9, minute=15, second=0, microsecond=0)
+            
+            idx = 0
+            for symbol, info in watchlist.items():
+                col = grid_cols[idx % 2]
+                idx += 1
+                
+                with col:
+                    st.markdown(f"#### {symbol} ({'Gainer' if info['type'] == 'GAINER' else 'Loser'})")
+                    try:
+                        df_chart = kite_scanner.fetch_kite_data(kite, info["token"], start_of_day, datetime.datetime.now(), "5minute")
+                        if df_chart.empty:
+                            st.warning(f"No chart data available for {symbol}.")
+                            continue
+                            
+                        df_chart.columns = [c.lower() for c in df_chart.columns]
+                        if df_chart.index.tz is not None:
+                            df_chart.index = df_chart.index.tz_localize(None)
+                        
+                        import morning_range_scanner
+                        df_chart['vwap'] = morning_range_scanner.calculate_vwap(df_chart)
+                        
+                        cur_price = df_chart.iloc[-1]['close']
+                        cur_vwap = df_chart.iloc[-1]['vwap']
+                        status_text = "Triggered" if symbol in notified else "Watching"
+                        status_color = "#22c55e" if symbol in notified else "#f59e0b"
+                        
+                        # Clean inline flex display to prevent truncation
+                        st.markdown(f"""
+                            <div style="display: flex; justify-content: space-between; font-size: 0.9rem; font-weight: 600; color: var(--text-color); opacity: 0.9; margin-bottom: 5px; background: var(--secondary-background-color); padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);">
+                                <span>💵 LTP: <span style="color:var(--text-color); font-weight:700;">₹{cur_price:.2f}</span></span>
+                                <span>|</span>
+                                <span>📈 VWAP: <span style="color:var(--text-color); font-weight:700;">₹{cur_vwap:.2f}</span></span>
+                                <span>|</span>
+                                <span>⏳ Status: <span style="color:{status_color}; font-weight:700;">{status_text}</span></span>
+                            </div>
+                        """, unsafe_allow_html=True)
+                        
+                        import plotly.graph_objects as go
+                        from plotly.subplots import make_subplots
+                        
+                        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                                            vertical_spacing=0.08, 
+                                            row_heights=[0.7, 0.3])
+                        
+                        fig.add_trace(go.Candlestick(
+                            x=df_chart.index,
+                            open=df_chart['open'],
+                            high=df_chart['high'],
+                            low=df_chart['low'],
+                            close=df_chart['close'],
+                            name='Price',
+                            increasing_line_color='#22c55e', decreasing_line_color='#ef4444',
+                            increasing_fillcolor='#22c55e', decreasing_fillcolor='#ef4444'
+                        ), row=1, col=1)
+                        
+                        fig.add_trace(go.Scatter(
+                            x=df_chart.index,
+                            y=df_chart['vwap'],
+                            mode='lines',
+                            name='VWAP',
+                            line=dict(color='#0284c7', width=1.5, dash='dash')
+                        ), row=1, col=1)
+                        
+                        colors = ['#22c55e' if close >= open_val else '#ef4444' for close, open_val in zip(df_chart['close'], df_chart['open'])]
+                        fig.add_trace(go.Bar(
+                            x=df_chart.index,
+                            y=df_chart['volume'],
+                            name='Volume',
+                            marker_color=colors,
+                            opacity=0.75
+                        ), row=2, col=1)
+                        
+                        fig.update_layout(
+                            xaxis_rangeslider_visible=False,
+                            height=250,
+                            margin=dict(l=5, r=5, t=5, b=5),
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            showlegend=False
+                        )
+                        fig.update_xaxes(
+                            gridcolor='#e2e8f0',
+                            zeroline=False
+                        )
+                        fig.update_yaxes(
+                            gridcolor='#e2e8f0',
+                            zeroline=False
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                        
+                    except Exception as ce:
+                        st.error(f"Error loading chart for {symbol}: {ce}")
+
 if active_tab == "💼 Intraday Paper Trades":
     st.markdown("## 📦 Live Paper Trading Portfolio")
     try:
@@ -834,20 +1027,20 @@ if active_tab == "💼 Intraday Paper Trades":
 
                 st.markdown(f"""
                 <div style="display: flex; gap: 20px; margin-bottom: 25px;">
-                    <div style="flex: 1; background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; border-left: 6px solid {pnl_color}; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                        <div style="font-size: 0.85rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Net Live P&L</div>
+                    <div style="flex: 1; background: var(--secondary-background-color); padding: 20px; border-radius: 12px; border: 1px solid rgba(128, 128, 128, 0.2); border-left: 6px solid {pnl_color}; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                        <div style="font-size: 0.85rem; color: var(--text-color); opacity: 0.7; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Net Live P&L</div>
                         <div style="font-size: 1.5rem; font-weight: 700; color: {pnl_color}; margin: 5px 0;">₹{total_net_pnl:,.2f}</div>
-                        <div style="font-size: 0.75rem; color: #94a3b8;">Incl. Charges: ₹{total_charges:,.2f}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-color); opacity: 0.5;">Incl. Charges: ₹{total_charges:,.2f}</div>
                     </div>
-                    <div style="flex: 1; background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; border-left: 6px solid #3b82f6; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                        <div style="font-size: 0.85rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Capital Deployed</div>
-                        <div style="font-size: 1.5rem; font-weight: 700; color: #1e293b; margin: 5px 0;">₹{total_capital:,.2f}</div>
-                        <div style="font-size: 0.75rem; color: #94a3b8;">Active Positions: {len(portfolio_df[portfolio_df['Status']=='Active'])}</div>
+                    <div style="flex: 1; background: var(--secondary-background-color); padding: 20px; border-radius: 12px; border: 1px solid rgba(128, 128, 128, 0.2); border-left: 6px solid #3b82f6; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                        <div style="font-size: 0.85rem; color: var(--text-color); opacity: 0.7; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Capital Deployed</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: var(--text-color); margin: 5px 0;">₹{total_capital:,.2f}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-color); opacity: 0.5;">Active Positions: {len(portfolio_df[portfolio_df['Status']=='Active'])}</div>
                     </div>
-                    <div style="flex: 1; background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; border-left: 6px solid {pnl_color}; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                        <div style="font-size: 0.85rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Return Rate</div>
+                    <div style="flex: 1; background: var(--secondary-background-color); padding: 20px; border-radius: 12px; border: 1px solid rgba(128, 128, 128, 0.2); border-left: 6px solid {pnl_color}; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                        <div style="font-size: 0.85rem; color: var(--text-color); opacity: 0.7; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Return Rate</div>
                         <div style="font-size: 1.5rem; font-weight: 700; color: {pnl_color}; margin: 5px 0;">{(total_net_pnl/total_capital*100 if total_capital>0 else 0):.2f}%</div>
-                        <div style="font-size: 0.75rem; color: #94a3b8;">Win/Loss: {win_ratio}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-color); opacity: 0.5;">Win/Loss: {win_ratio}</div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -871,10 +1064,10 @@ if active_tab == "💼 Intraday Paper Trades":
 
                     s_color = "#10b981" if s_net_pl >= 0 else "#ef4444"
 
-                    card = f'<div style="flex: 1; min-width: 180px; background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; border-left: 5px solid {s_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">' \
-                           f'<div style="font-size: 0.8rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;">🎯 {strat_name}</div>' \
+                    card = f'<div style="flex: 1; min-width: 180px; background: var(--secondary-background-color); padding: 15px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); border-left: 5px solid {s_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">' \
+                           f'<div style="font-size: 0.8rem; color: var(--text-color); opacity: 0.7; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;">🎯 {strat_name}</div>' \
                            f'<div style="font-size: 1.25rem; font-weight: 700; color: {s_color}; margin: 3px 0;">₹{s_net_pl:,.2f}</div>' \
-                           f'<div style="font-size: 0.7rem; color: #94a3b8;">Pos: {s_count} | Ret: {s_ret:.2f}%</div>' \
+                           f'<div style="font-size: 0.7rem; color: var(--text-color); opacity: 0.5;">Pos: {s_count} | Ret: {s_ret:.2f}%</div>' \
                            f'</div>'
                     cards_html.append(card)
 
@@ -1011,7 +1204,7 @@ if active_tab == "💼 Intraday Paper Trades":
                         active_equity = portfolio_df[portfolio_df['Status'] == 'Active']
                         count = 0
                         for _, row in active_equity.iterrows():
-                            if paper_trader.exit_trade(row['Ticker'], _kite_exit):
+                            if paper_trader.exit_trade(row['Ticker'], _kite_exit, entry_time=row['EntryTime']):
                                 count += 1
                         paper_trader.export_history_to_excel()
                         st.cache_data.clear() # Force portfolio refresh
@@ -1291,17 +1484,17 @@ if active_tab == "📊 Swing Trades":
                     arc_color = "#10b981" if total_realized_swing >= 0 else "#ef4444"
 
                     st.markdown(f"""
-                    <div style="background: white; padding: 25px; border-radius: 16px; border: 1px solid #e2e8f0; border-left: 8px solid {arc_color}; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px;">
+                    <div style="background: var(--secondary-background-color); padding: 25px; border-radius: 16px; border: 1px solid rgba(128, 128, 128, 0.2); border-left: 8px solid {arc_color}; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px;">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
                             <div>
-                                <div style="color: #64748b; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Total Realized Archive P&L</div>
+                                <div style="color: var(--text-color); opacity: 0.7; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Total Realized Archive P&L</div>
                                 <div style="color: {arc_color}; font-weight: 700; font-size: 2.2rem; margin: 5px 0;">₹{total_realized_swing:,.2f}</div>
-                                <div style="color: #94a3b8; font-size: 0.85rem;">Overall Strategy ROI: <span style="color: {arc_color}; font-weight: bold;">{archive_roi_pct:.2f}%</span></div>
+                                <div style="color: var(--text-color); opacity: 0.5; font-size: 0.85rem;">Overall Strategy ROI: <span style="color: {arc_color}; font-weight: bold;">{archive_roi_pct:.2f}%</span></div>
                             </div>
-                            <div style="text-align: right; border-left: 1px solid #e2e8f0; padding-left: 20px;">
-                                <div style="color: #64748b; font-size: 0.85rem; font-weight: 600; text-transform: uppercase;">Total Invested</div>
-                                <div style="color: #1e293b; font-weight: 700; font-size: 1.5rem; margin: 5px 0;">₹{total_invested_archive:,.2f}</div>
-                                <div style="color: #94a3b8; font-size: 0.75rem;">Across {len(archive_df)} closed trades</div>
+                            <div style="text-align: right; border-left: 1px solid rgba(128, 128, 128, 0.2); padding-left: 20px;">
+                                <div style="color: var(--text-color); opacity: 0.7; font-size: 0.85rem; font-weight: 600; text-transform: uppercase;">Total Invested</div>
+                                <div style="color: var(--text-color); font-weight: 700; font-size: 1.5rem; margin: 5px 0;">₹{total_invested_archive:,.2f}</div>
+                                <div style="color: var(--text-color); opacity: 0.5; font-size: 0.75rem;">Across {len(archive_df)} closed trades</div>
                             </div>
                         </div>
                     </div>
@@ -1652,7 +1845,8 @@ if st.session_state.get('kite_access_token'):
             "failed_breakout": False,
             "morning_range": False,
             "vcp": False,
-            "ai_advisor": False
+            "ai_advisor": False,
+            "gainers_losers": False
         }
         
     def save_scheduler_settings(settings):
@@ -1672,6 +1866,7 @@ if st.session_state.get('kite_access_token'):
     if 'mon_bullish' not in st.session_state: st.session_state.mon_bullish = settings.get("bullish", False)
     if 'mon_failed_breakout' not in st.session_state: st.session_state.mon_failed_breakout = settings.get("failed_breakout", False)
     if 'mon_morning_range' not in st.session_state: st.session_state.mon_morning_range = settings.get("morning_range", False)
+    if 'mon_gainers_losers' not in st.session_state: st.session_state.mon_gainers_losers = settings.get("gainers_losers", False)
     
     t_orb = st.sidebar.toggle("15-Min ORB Monitor", value=st.session_state.mon_orb)
     t_52w = st.sidebar.toggle("52-Week High Monitor", value=st.session_state.mon_52w)
@@ -1681,12 +1876,14 @@ if st.session_state.get('kite_access_token'):
     t_bullish = st.sidebar.toggle("Bullish Breakout Monitor", value=st.session_state.mon_bullish)
     t_failed = st.sidebar.toggle("Failed Breakout Short Monitor", value=st.session_state.mon_failed_breakout)
     t_morning = st.sidebar.toggle("Morning Range Monitor", value=st.session_state.mon_morning_range)
+    t_gainers_losers = st.sidebar.toggle("Top Gainers/Losers Monitor", value=st.session_state.mon_gainers_losers)
     
     # Save if modified
     if (t_orb != st.session_state.mon_orb or t_52w != st.session_state.mon_52w or 
         t_bearish != st.session_state.mon_bearish or t_vwap != st.session_state.mon_vwap_rejection or 
         t_bullish_vwap != st.session_state.mon_bullish_vwap_rejection or t_bullish != st.session_state.mon_bullish or 
-        t_failed != st.session_state.mon_failed_breakout or t_morning != st.session_state.mon_morning_range):
+        t_failed != st.session_state.mon_failed_breakout or t_morning != st.session_state.mon_morning_range or
+        t_gainers_losers != st.session_state.mon_gainers_losers):
         
         st.session_state.mon_orb = t_orb
         st.session_state.mon_52w = t_52w
@@ -1696,6 +1893,7 @@ if st.session_state.get('kite_access_token'):
         st.session_state.mon_bullish = t_bullish
         st.session_state.mon_failed_breakout = t_failed
         st.session_state.mon_morning_range = t_morning
+        st.session_state.mon_gainers_losers = t_gainers_losers
         
         settings.update({
             "orb": t_orb,
@@ -1705,7 +1903,8 @@ if st.session_state.get('kite_access_token'):
             "bullish_vwap_rejection": t_bullish_vwap,
             "bullish": t_bullish,
             "failed_breakout": t_failed,
-            "morning_range": t_morning
+            "morning_range": t_morning,
+            "gainers_losers": t_gainers_losers
         })
         save_scheduler_settings(settings)
         st.rerun()
@@ -1746,26 +1945,8 @@ if st.session_state.get('kite_access_token'):
             st.toast("Stopped background Volatility Contraction monitor.", icon="🛑")
             st.rerun()
             
-    # Persistent Toggle for AI Active Positions Advisor
-    import ai_advisor
-    ai_advisor_state = ai_advisor.is_ai_advisor_enabled()
-    ai_advisor_toggle = st.sidebar.toggle("🤖 AI Position Advisor", value=ai_advisor_state)
-    if ai_advisor_toggle != ai_advisor_state:
-        ai_advisor.set_ai_advisor_enabled(ai_advisor_toggle)
-        settings.update({"ai_advisor": ai_advisor_toggle})
-        save_scheduler_settings(settings)
-        st.session_state.last_ai_advisor_run = None
-        st.toast(f"🤖 AI Position Advisor {'Enabled' if ai_advisor_toggle else 'Disabled'}!", icon="🔔")
-        st.rerun()
-        
-    if ai_advisor_toggle:
-        now = datetime.datetime.now()
-        current_time = now.time()
-        start_time = datetime.time(9, 45)
-        end_time = datetime.time(14, 45)
-        is_within_window = (start_time <= current_time <= end_time) and (now.weekday() <= 4)
-        if not is_within_window:
-            st.sidebar.warning("⚠️ AI Advisor is active but currently outside market hours (9:45 AM - 2:45 PM Weekdays).")
+    # Persistent Toggle for AI Active Positions Advisor (Disabled/Hidden)
+    ai_advisor_toggle = False
     
     vcp_active = volatility_contraction_scanner.is_live_monitor_running()
     if st.session_state.mon_orb or st.session_state.mon_52w or st.session_state.mon_bearish or st.session_state.mon_bullish or st.session_state.mon_vwap_rejection or st.session_state.mon_failed_breakout or st.session_state.mon_morning_range or vcp_active or ai_advisor_toggle:
@@ -2513,10 +2694,10 @@ if active_tab == "🔍 Scanners":
 
         with col1:
             st.markdown("""
-            <div style='background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; min-height: 250px; box-shadow: 0 4px 6px rgba(0,0,0,0.02);'>
-                <h4 style='color:#1e293b; font-weight:600; margin-top:0;'>1️⃣ Stage 1: Proximity Screen</h4>
+            <div style='background: var(--secondary-background-color); padding: 20px; border-radius: 12px; border: 1px solid rgba(128, 128, 128, 0.2); min-height: 250px; box-shadow: 0 4px 6px rgba(0,0,0,0.02);'>
+                <h4 style='color:var(--text-color); font-weight:600; margin-top:0;'>1️⃣ Stage 1: Proximity Screen</h4>
                 <p style='font-size:0.8rem; color:#f59e0b; font-weight:bold; margin: 4px 0;'>⚠️ Ideal Time: After Market Close or Pre-Market (9:00 - 9:15 AM)</p>
-                <p style='font-size:0.8rem; color:#64748b;'>Filters the Nifty 500 universe for liquid stocks trading near their 20-day high (Resistance) or 20-day low (Support).</p>
+                <p style='font-size:0.8rem; color:var(--text-color); opacity: 0.7;'>Filters the Nifty 500 universe for liquid stocks trading near their 20-day high (Resistance) or 20-day low (Support).</p>
             </div>
             """, unsafe_allow_html=True)
 
@@ -2539,10 +2720,10 @@ if active_tab == "🔍 Scanners":
 
         with col2:
             st.markdown("""
-            <div style='background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; min-height: 250px; box-shadow: 0 4px 6px rgba(0,0,0,0.02);'>
-                <h4 style='color:#1e293b; font-weight:600; margin-top:0;'>2️⃣ Stage 2: Volatility Check</h4>
+            <div style='background: var(--secondary-background-color); padding: 20px; border-radius: 12px; border: 1px solid rgba(128, 128, 128, 0.2); min-height: 250px; box-shadow: 0 4px 6px rgba(0,0,0,0.02);'>
+                <h4 style='color:var(--text-color); font-weight:600; margin-top:0;'>2️⃣ Stage 2: Volatility Check</h4>
                 <p style='font-size:0.8rem; color:#f59e0b; font-weight:bold; margin: 4px 0;'>⚠️ Ideal Time: Pre-Market (9:10 - 9:15 AM) after caching</p>
-                <p style='font-size:0.8rem; color:#64748b;'>Validates EOD candidates for Volatility Contraction phase (5-day Wilder's ATR is less than 14-day ATR).</p>
+                <p style='font-size:0.8rem; color:var(--text-color); opacity: 0.7;'>Validates EOD candidates for Volatility Contraction phase (5-day Wilder's ATR is less than 14-day ATR).</p>
             </div>
             """, unsafe_allow_html=True)
 
@@ -2567,11 +2748,11 @@ if active_tab == "🔍 Scanners":
             status_label = "<span style='color:#10b981; font-weight:bold;'>🟢 Streaming (Connected)</span>" if is_running else "<span style='color:#ef4444; font-weight:bold;'>🔴 Offline (Stopped)</span>"
 
             st.markdown(f"""
-            <div style='background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; min-height: 250px; box-shadow: 0 4px 6px rgba(0,0,0,0.02);'>
-                <h4 style='color:#1e293b; font-weight:600; margin-top:0;'>3️⃣ Stage 3: Live Monitor</h4>
+            <div style='background: var(--secondary-background-color); padding: 20px; border-radius: 12px; border: 1px solid rgba(128, 128, 128, 0.2); min-height: 250px; box-shadow: 0 4px 6px rgba(0,0,0,0.02);'>
+                <h4 style='color:var(--text-color); font-weight:600; margin-top:0;'>3️⃣ Stage 3: Live Monitor</h4>
                 <p style='font-size:0.8rem; color:#f59e0b; font-weight:bold; margin: 4px 0;'>⚠️ Ideal Time: Market Hours (9:15 AM - 3:30 PM)</p>
-                <p style='font-size:0.8rem; color:#64748b; margin-bottom:12px;'>Streams ticks in real-time and logs paper trades in your portfolio on triggers.</p>
-                <p style='font-size:0.85rem; color:#1e293b;'><b>Status:</b> {status_label}</p>
+                <p style='font-size:0.8rem; color:var(--text-color); opacity: 0.7; margin-bottom:12px;'>Streams ticks in real-time and logs paper trades in your portfolio on triggers.</p>
+                <p style='font-size:0.85rem; color:var(--text-color);'><b>Status:</b> {status_label}</p>
             </div>
             """, unsafe_allow_html=True)
 
@@ -2805,53 +2986,7 @@ if active_tab == "🔍 Scanners":
                         st.success(f"Successfully executed {count} paper trades!")
                         st.rerun()
 
-        st.markdown("### AI Conviction Analysis")
-        gemini_key = getattr(config, 'GEMINI_API_KEY', '')
-        if not gemini_key:
-            gemini_key = st.text_input("Gemini API Key", type="password")
-
-        if st.button("🤖 Ask AI for Conviction Picks"):
-            if not gemini_key:
-                st.error("Please provide a Gemini API Key in config.py or above to use this feature.")
-            else:
-                with st.spinner("Gemini is analyzing the shortlisted stocks..."):
-                    import ai_advisor
-                    analysis = ai_advisor.analyze_stocks(current_results, gemini_key, strategy_name=strategy)
-
-                    st.info("AI Analysis Complete")
-                    st.markdown(analysis)
-
-                    # Automatically send AI analysis to Telegram with dynamic infographic
-                    import telegram_agent
-                    import image_generator
-                    tel_token = getattr(config, 'TELEGRAM_BOT_TOKEN', '')
-
-                    # Use strategy-specific chat ID for AI analysis too
-                    if strategy in ["15-Min Bearish Breakdown (Kite)", "15-Min Bullish Breakout (Kite)", "Failed Breakout Short (Kite)", "15-Min ORB Breakout (Kite)", "Volatility Contraction Scanner (Kite)"]:
-                        tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID_INTRADAY', '')
-                    else:
-                        tel_chat_id = getattr(config, 'TELEGRAM_CHAT_ID', '')
-
-
-                    # Only send if there's no error in the analysis
-                    if tel_token and tel_chat_id and analysis and "Error:" not in analysis and "temporarily busy" not in analysis:
-                        # Generate the graphic
-                        img_path = image_generator.create_infographic(current_results, scan_name=strategy)
-
-                        if img_path:
-                            caption = f"🤖 *AI Conviction Analysis: {strategy}*\n\n{analysis}"
-                            if len(caption) < 1000:
-                                 success = telegram_agent.send_photo(img_path, caption, tel_token, tel_chat_id)
-                            else:
-                                 telegram_agent.send_photo(img_path, f"🚀 Top {strategy} Picks", tel_token, tel_chat_id)
-                                 success = telegram_agent.send_message(caption, tel_token, tel_chat_id)
-                        else:
-                            success = telegram_agent.send_message(f"🤖 *AI Conviction Analysis*\n\n{analysis}", tel_token, tel_chat_id)
-
-                        if success:
-                            st.success("📲 Infographic & AI Analysis sent to Telegram!")
-                        else:
-                            st.error("⚠️ Failed to send to Telegram.")
+        # AI Conviction Analysis is disabled.
                     elif "Error:" in analysis:
                         st.warning("⚠️ AI analysis failed. Skipping Telegram infographic.")
 

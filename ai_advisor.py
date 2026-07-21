@@ -188,17 +188,8 @@ def analyze_active_positions(prompt, gemini_api_key):
 SETTINGS_FILE = os.path.join("data", "state", ".ai_advisor_settings.json")
 
 def is_ai_advisor_enabled() -> bool:
-    """Helper to check if the AI Active Positions Advisor monitor is enabled."""
-    import os
-    import json
-    if not os.path.exists(SETTINGS_FILE):
-        return True # Default to enabled
-    try:
-        with open(SETTINGS_FILE, "r") as f:
-            data = json.load(f)
-            return data.get("enabled", True)
-    except:
-        return True
+    """Helper to check if the AI Active Positions Advisor monitor is enabled (disabled globally)."""
+    return False
 
 def set_ai_advisor_enabled(enabled: bool):
     """Helper to persistent-save the toggle state of the AI Advisor."""

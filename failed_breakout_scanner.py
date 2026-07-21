@@ -163,8 +163,9 @@ def scan_failed_breakouts(kite, progress_callback=None):
             if not nifty_df.empty:
                 nifty_open = nifty_df.iloc[0]['open']
                 nifty_ltp = nifty_df.iloc[-1]['close']
-                nifty_bullish = nifty_ltp > nifty_open
-                logging.info(f"Broad Market Check -> Nifty Open: {nifty_open:.2f}, LTP: {nifty_ltp:.2f} | Bullish? {nifty_bullish}")
+                nifty_change_pct = (nifty_ltp - nifty_open) / nifty_open
+                nifty_bullish = nifty_change_pct > 0.0010
+                logging.info(f"Broad Market Check -> Nifty Open: {nifty_open:.2f}, LTP: {nifty_ltp:.2f} | Change %: {nifty_change_pct*100:.3f}% | Bullish? {nifty_bullish}")
     except Exception as ne:
         logging.warning(f"Failed to fetch Nifty 50 trend: {ne}")
         
@@ -308,8 +309,8 @@ def scan_failed_breakouts(kite, progress_callback=None):
             
             # Combine all conditions (incorporating the new consecutive_above and bearish rejection shape filters)
             if is_trap_triggered and is_bearish_shape and is_bearish_rejection and (consecutive_above <= 4) and vol_spike and below_vwap and not_oversold and not is_chasing:
-                # Active Trading Hours (Post-9:30 AM and Before 2:45 PM)
-                if datetime.time(9, 30) <= to_date.time() <= datetime.time(14, 45):
+                # Active Trading Hours (Post-9:30 AM and Before 2:00 PM)
+                if datetime.time(9, 30) <= to_date.time() <= datetime.time(14, 0):
                     # Risk Management parameters
                     entry_price = ltp
                     qty = int(250000 / entry_price)
@@ -337,7 +338,7 @@ def scan_failed_breakouts(kite, progress_callback=None):
                         "Target": str(round(target_price, 2)),
                         "Status": "Triggered",
                         "Token": token
-                    })
+                     })
                     logging.info(f"🔴 Failed Breakout Short Detected: {symbol} at {entry_price}")
                 else:
                     results.append({
@@ -352,7 +353,7 @@ def scan_failed_breakouts(kite, progress_callback=None):
                         "RSI (5m)": round(latest_rsi, 2),
                         "Stop Loss": "-",
                         "Target": "-",
-                        "Status": "Closed for Day" if to_date.time() > datetime.time(14, 45) else "Monitoring",
+                        "Status": "Closed for Day" if to_date.time() > datetime.time(14, 0) else "Monitoring",
                         "Token": token
                     })
             else:
@@ -369,7 +370,7 @@ def scan_failed_breakouts(kite, progress_callback=None):
                     "RSI (5m)": round(latest_rsi, 2),
                     "Stop Loss": "-",
                     "Target": "-",
-                    "Status": "Closed for Day" if to_date.time() > datetime.time(14, 45) else "Monitoring",
+                    "Status": "Closed for Day" if to_date.time() > datetime.time(14, 0) else "Monitoring",
                     "Token": token
                 })
         except Exception as e:
