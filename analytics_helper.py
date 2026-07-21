@@ -61,7 +61,7 @@ def get_bulk_gaps_cached(tickers_tuple, start_date, end_date):
         logging.warning(f"Failed to fetch gaps in bulk: {e}")
     return gaps_dict
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def load_and_normalize_archived_trades():
     trades = []
     
@@ -81,23 +81,73 @@ def load_and_normalize_archived_trades():
                     net_pnl = pnl - charges
                     ticker_clean = str(row['Ticker']).replace('.NS', '').replace('.BO', '').upper()
                     
+                    strat = row.get('Strategy', 'Intraday Equity')
+                    type_str = str(row.get('Type', ''))
+                    # Correctly classify asset class based on Strategy/Type/Ticker
+                    if strat in ['Option Desk', 'Rolling Straddle'] or 'Options Selling' in type_str:
+                        asset_cls = "Options Selling"
+                    else:
+                        asset_cls = "Equity Intraday"
+                    
                     trades.append({
                         "Ticker": ticker_clean,
-                        "Type": row['Type'],
+                        "Type": type_str,
                         "EntryPrice": float(row['EntryPrice']),
                         "ExitPrice": float(row['ExitPrice']) if pd.notnull(row.get('ExitPrice')) else float(row['EntryPrice']),
                         "Qty": int(row['Qty']),
                         "EntryTime": entry_time,
                         "ExitTime": exit_time,
                         "NetPnL": net_pnl,
-                        "Strategy": row.get('Strategy', 'Intraday Equity'),
-                        "AssetClass": "Equity Intraday",
+                        "Strategy": strat,
+                        "AssetClass": asset_cls,
                         "CapitalDeployed": buy_val
                     })
                 except Exception:
                     pass
         except Exception as e:
             logging.error(f"Error loading equity archive: {e}")
+
+    # 1b. Active / Today's Paper Trade History (Closed Trades)
+    file_today = os.path.join("data", "trades", "paper_trade_history.csv")
+    if os.path.exists(file_today):
+        try:
+            df_today = pd.read_csv(file_today)
+            df_today_closed = df_today[df_today['Status'] == 'CLOSED'] if 'Status' in df_today.columns else df_today
+            for _, row in df_today_closed.iterrows():
+                try:
+                    entry_time = pd.to_datetime(row['EntryTime'])
+                    exit_time = pd.to_datetime(row['ExitTime']) if pd.notnull(row.get('ExitTime')) else entry_time
+                    pnl = float(row.get('Final P&L', 0.0))
+                    buy_val = float(row.get('EntryPrice', 0)) * float(row.get('Qty', 0))
+                    sell_val = float(row.get('ExitPrice', 0)) * float(row.get('Qty', 0))
+                    charges = 0.0006 * (buy_val + sell_val) + 40.0
+                    net_pnl = pnl - charges
+                    ticker_clean = str(row['Ticker']).replace('.NS', '').replace('.BO', '').upper()
+                    
+                    strat = row.get('Strategy', 'Intraday Equity')
+                    type_str = str(row.get('Type', ''))
+                    if strat in ['Option Desk', 'Rolling Straddle'] or 'Options Selling' in type_str:
+                        asset_cls = "Options Selling"
+                    else:
+                        asset_cls = "Equity Intraday"
+                    
+                    trades.append({
+                        "Ticker": ticker_clean,
+                        "Type": type_str,
+                        "EntryPrice": float(row['EntryPrice']),
+                        "ExitPrice": float(row['ExitPrice']) if pd.notnull(row.get('ExitPrice')) else float(row['EntryPrice']),
+                        "Qty": int(row['Qty']),
+                        "EntryTime": entry_time,
+                        "ExitTime": exit_time,
+                        "NetPnL": net_pnl,
+                        "Strategy": strat,
+                        "AssetClass": asset_cls,
+                        "CapitalDeployed": buy_val
+                    })
+                except Exception:
+                    pass
+        except Exception as e:
+            logging.error(f"Error loading today paper trade history: {e}")
 
     # 2. Options Archive
     file_opt = os.path.join("data", "trades", "options_trade_archive.csv")
@@ -117,7 +167,7 @@ def load_and_normalize_archived_trades():
                     
                     trades.append({
                         "Ticker": ticker_clean,
-                        "Type": row['Type'],
+                        "Type": str(row.get('Type', 'Option Trade')),
                         "EntryPrice": float(row['EntryPrice']),
                         "ExitPrice": float(row['ExitPrice']) if pd.notnull(row.get('ExitPrice')) else float(row['EntryPrice']),
                         "Qty": int(row['Qty']),
@@ -133,7 +183,7 @@ def load_and_normalize_archived_trades():
         except Exception as e:
             logging.error(f"Error loading options archive: {e}")
 
-    # 3. Swing Archive
+    # 3. Swing Archive & Active Swing
     file_swing = os.path.join("data", "trades", "swing_trades_archived.csv")
     if os.path.exists(file_swing):
         try:
@@ -167,7 +217,8 @@ def load_and_normalize_archived_trades():
     if not trades:
         return pd.DataFrame()
         
-    return pd.DataFrame(trades).sort_values('ExitTime')
+    df_all = pd.DataFrame(trades).drop_duplicates(subset=['Ticker', 'EntryTime', 'Strategy']).sort_values('ExitTime')
+    return df_all
 
 def render_analytics_tab(portfolio_df=None):
     st.markdown("<h2 style='color:#3b82f6; font-family:\"Plus Jakarta Sans\", sans-serif; font-weight:700;'>📊 Performance & Portfolio Analytics</h2>", unsafe_allow_html=True)
@@ -195,15 +246,15 @@ def render_analytics_tab(portfolio_df=None):
     if 'preset_date_choice' not in st.session_state:
         st.session_state.preset_date_choice = "All Time"
         
-    # CSS injection for premium card styling
+    # CSS injection for theme-adaptive metric cards
     st.markdown("""
         <style>
             .metric-card {
-                background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-                border: 1px solid #334155;
+                background: var(--background-secondary-color, rgba(30, 41, 59, 0.05));
+                border: 1px solid rgba(148, 163, 184, 0.25);
                 border-radius: 12px;
                 padding: 18px 22px;
-                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+                box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.05);
                 transition: transform 0.2s ease-in-out, border-color 0.2s ease-in-out;
                 margin-bottom: 20px;
                 min-height: 120px;
@@ -213,7 +264,8 @@ def render_analytics_tab(portfolio_df=None):
                 border-color: #3b82f6;
             }
             .metric-lbl {
-                color: #94a3b8;
+                color: var(--text-color, #64748b);
+                opacity: 0.8;
                 font-size: 0.75rem;
                 font-weight: 600;
                 text-transform: uppercase;
@@ -239,7 +291,8 @@ def render_analytics_tab(portfolio_df=None):
                 margin: 0;
             }
             .metric-subtext {
-                color: #64748b;
+                color: var(--text-color, #64748b);
+                opacity: 0.7;
                 font-size: 0.75rem;
                 margin-top: 4px;
                 font-weight: 500;
@@ -305,8 +358,13 @@ def render_analytics_tab(portfolio_df=None):
             selected_classes = st.multiselect("Asset Class Selection", options=all_classes, default=all_classes, key="mult_assets")
             
         with col_fil2:
-            all_strats = sorted(all_trades_df['Strategy'].unique().tolist())
-            selected_strats = st.multiselect("Strategy Filter", options=all_strats, default=all_strats, key="mult_strats")
+            # Dynamically derive available strategies based on chosen asset classes
+            if selected_classes:
+                available_strats = sorted(all_trades_df[all_trades_df['AssetClass'].isin(selected_classes)]['Strategy'].unique().tolist())
+            else:
+                available_strats = sorted(all_trades_df['Strategy'].unique().tolist())
+                
+            selected_strats = st.multiselect("Strategy Filter", options=available_strats, default=available_strats, key="mult_strats")
             
         with col_fil3:
             capital_base = st.number_input("Capital Base (₹) for ROI & Drawdown %", min_value=10000.0, value=500000.0, step=50000.0, key="cap_base_input")
@@ -493,11 +551,13 @@ def render_analytics_tab(portfolio_df=None):
             
         with col_dist2:
             st.markdown("<p style='font-size:1.05rem; font-weight:600; color:#1e293b; margin-bottom:10px;'>📊 Net PnL Contribution by Strategy</p>", unsafe_allow_html=True)
-            strat_perf = filtered_df.groupby('Strategy').agg({
-                'NetPnL': ['sum', 'count'],
-                'Ticker': lambda x: len(x[filtered_df.loc[x.index, 'NetPnL'] > 0])
-            }).reset_index()
-            strat_perf.columns = ['Strategy', 'Net P&L', 'Total Trades', 'Wins']
+            strat_perf = filtered_df.groupby('Strategy').apply(
+                lambda g: pd.Series({
+                    'Net P&L': g['NetPnL'].sum(),
+                    'Total Trades': len(g),
+                    'Wins': len(g[g['NetPnL'] > 0])
+                })
+            ).reset_index()
             strat_perf['Win Rate (%)'] = (strat_perf['Wins'] / strat_perf['Total Trades']) * 100
             strat_perf = strat_perf.sort_values(by='Net P&L', ascending=False)
             
@@ -604,15 +664,17 @@ def render_analytics_tab(portfolio_df=None):
                         else: return "High Volatility (>18 VIX)"
                         
                     vix_clean['VIX_Regime'] = vix_clean['VIX'].apply(get_vix_class)
-                    vix_table = vix_clean.groupby('VIX_Regime').agg({
-                        'NetPnL': ['sum', 'count'],
-                        'Ticker': lambda x: len(x[vix_clean.loc[x.index, 'NetPnL'] > 0])
-                    }).reset_index()
-                    vix_table.columns = ['Regime', 'Net P&L', 'Total Trades', 'Wins']
+                    vix_table = vix_clean.groupby('VIX_Regime').apply(
+                        lambda g: pd.Series({
+                            'Net P&L': g['NetPnL'].sum(),
+                            'Total Trades': len(g),
+                            'Wins': len(g[g['NetPnL'] > 0])
+                        })
+                    ).reset_index()
                     vix_table['Win Rate (%)'] = (vix_table['Wins'] / vix_table['Total Trades']) * 100
                     
                     st.dataframe(
-                        vix_table[['Regime', 'Total Trades', 'Win Rate (%)', 'Net P&L']].style.format({
+                        vix_table[['VIX_Regime', 'Total Trades', 'Win Rate (%)', 'Net P&L']].rename(columns={'VIX_Regime': 'Regime'}).style.format({
                             "Win Rate (%)": "{:.1f}%",
                             "Net P&L": "₹{:,.2f}"
                         }).map(style_pnl, subset=['Net P&L']),
@@ -647,15 +709,17 @@ def render_analytics_tab(portfolio_df=None):
                             else: return "Flat"
                             
                         gap_clean['Gap_Regime'] = gap_clean['Gap_Pct'].apply(get_gap_class)
-                        gap_table = gap_clean.groupby('Gap_Regime').agg({
-                            'NetPnL': ['sum', 'count'],
-                            'Ticker': lambda x: len(x[gap_clean.loc[x.index, 'NetPnL'] > 0])
-                        }).reset_index()
-                        gap_table.columns = ['Gap Scenario', 'Net P&L', 'Total Trades', 'Wins']
+                        gap_table = gap_clean.groupby('Gap_Regime').apply(
+                            lambda g: pd.Series({
+                                'Net P&L': g['NetPnL'].sum(),
+                                'Total Trades': len(g),
+                                'Wins': len(g[g['NetPnL'] > 0])
+                            })
+                        ).reset_index()
                         gap_table['Win Rate (%)'] = (gap_table['Wins'] / gap_table['Total Trades']) * 100
                         
                         st.dataframe(
-                            gap_table[['Gap Scenario', 'Total Trades', 'Win Rate (%)', 'Net P&L']].style.format({
+                            gap_table[['Gap_Regime', 'Total Trades', 'Win Rate (%)', 'Net P&L']].rename(columns={'Gap_Regime': 'Gap Scenario'}).style.format({
                                 "Win Rate (%)": "{:.1f}%",
                                 "Net P&L": "₹{:,.2f}"
                             }).map(style_pnl, subset=['Net P&L']),

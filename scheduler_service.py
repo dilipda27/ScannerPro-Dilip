@@ -74,9 +74,16 @@ def get_kite_instance():
         logging.error(f"Kite auth error: {e}")
         return None
 
+import pytz
+
+def get_ist_now():
+    """Return timezone-aware current datetime in IST (Asia/Kolkata)."""
+    ist = pytz.timezone('Asia/Kolkata')
+    return datetime.datetime.now(ist)
+
 def is_market_open():
-    """Check if today is a weekday and current time is within market hours (9:15-14:00)."""
-    now = datetime.datetime.now()
+    """Check if today is a weekday and current time is within market hours (9:15-14:00 IST)."""
+    now = get_ist_now()
     if now.weekday() > 4: # Weekend
         return False
     market_start = now.replace(hour=9, minute=15, second=0, microsecond=0)
@@ -84,20 +91,20 @@ def is_market_open():
     return market_start <= now <= market_end
 
 def is_monitoring_open():
-    """Check if today is a weekday and current time is within portfolio monitoring hours (9:15-15:20)."""
-    now = datetime.datetime.now()
+    """Check if today is a weekday and current time is within portfolio monitoring hours (9:15-15:20 IST)."""
+    now = get_ist_now()
     if now.weekday() > 4: # Weekend
         return False
     market_start = now.replace(hour=9, minute=15, second=0, microsecond=0)
     market_end = now.replace(hour=15, minute=20, second=0, microsecond=0)
     return market_start <= now <= market_end
 
-def run_automated_orb(scan_label):
+def run_automated_orb(scan_label="ORB Scan"):
     if not is_strategy_enabled("orb"):
-        logging.info("Skipping Automated ORB Scan: Disabled in settings.")
         return
     if datetime.datetime.today().weekday() > 4:
-        logging.info(f"Skipping {scan_label}: Weekend.")
+        return
+    if not is_market_open():
         return
 
     logging.info(f"🚀 Starting Automated ORB Scan: {scan_label}")
@@ -106,9 +113,8 @@ def run_automated_orb(scan_label):
         return
         
     try:
-        
-        # 2. Run Scan
-        results_df = kite_scanner.scan_orb_setups(kite)
+        import orb_scanner
+        results_df, _ = orb_scanner.scan_orb_setups(kite)
         
         # Check active portfolio and filter out existing tickers
         import paper_trader
@@ -1164,6 +1170,9 @@ schedule.every().day.at("09:31").do(run_automated_orb, scan_label="Initial 9:31 
 # 10:00 AM IST - Follow-up Sustainability Scan
 schedule.every().day.at("10:00").do(run_automated_orb, scan_label="Sustainability 10:00 AM")
 
+# Periodic 5-Min ORB Scan during prime morning hours (9:30 AM to 11:30 AM)
+schedule.every(5).minutes.do(run_automated_orb, scan_label="Continuous 5-Min ORB")
+
 # AI Advisor Active Positions monitor (Every 10 minutes between 9:45 AM and 2:45 PM)
 schedule.every(10).minutes.do(run_ai_position_advisor)
 
@@ -1256,6 +1265,11 @@ if __name__ == "__main__":
                     run_automated_morning_range()
                 except Exception as e:
                     logging.error(f"Continuous loop - Morning Range error: {e}")
+                
+                try:
+                    run_automated_orb("Continuous ORB")
+                except Exception as e:
+                    logging.error(f"Continuous loop - ORB error: {e}")
                 
                 try:
                     run_automated_gainers_losers()

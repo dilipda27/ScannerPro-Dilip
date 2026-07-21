@@ -2,18 +2,21 @@
 #FROM python:3.11-slim
 FROM python:3.12-slim
 
-# Set environment variables to optimize Python performance
+# Set environment variables to optimize Python performance & enforce IST timezone
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV TZ=Asia/Kolkata
 
 # Set the working directory in the container
 WORKDIR /app
 
-# Install system-level build tools and clean up apt cache to keep image size small
+# Install system-level build tools and tzdata for IST timezone configuration
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    tzdata \
     build-essential \
     gcc \
     python3-dev \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements file first to utilize Docker's cache layer for dependencies

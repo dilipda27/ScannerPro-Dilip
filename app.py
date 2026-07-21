@@ -2433,7 +2433,8 @@ if active_tab == "🔍 Scanners":
                             progress_bar.progress(progress)
                             status_text.text(f"Processing: {symbol} ({processed}/{total})")
 
-                        results_df, pre_screen_count = kite_scanner.scan_orb_setups(kite, progress_callback=update_progress)
+                        import orb_scanner
+                        results_df, pre_screen_count = orb_scanner.scan_orb_setups(kite, progress_callback=update_progress)
                         st.info(f"📊 ORB Pre-check: {pre_screen_count} candidates matched initial criteria.")
                     except Exception as e:
                         st.error(f"Failed to initialize Kite API: {e}")
