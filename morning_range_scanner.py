@@ -251,9 +251,9 @@ def scan_morning_range(kite):
             return None
             
         try:
-            # Fetch today's data up to now
-            df = kite_scanner.fetch_kite_data(kite, info["token"], start_of_day, datetime.datetime.now(), "5minute")
-            if df.empty or len(df) < 7: # Must have candles post 09:45
+            # Fetch today's data up to now in 1-minute resolution for rapid execution
+            df = kite_scanner.fetch_kite_data(kite, info["token"], start_of_day, datetime.datetime.now(), "minute")
+            if df.empty or len(df) < 15: # Must have sufficient 1m candles post 09:45
                 return None
                 
             df.columns = [c.lower() for c in df.columns]
@@ -267,7 +267,7 @@ def scan_morning_range(kite):
                 return None
                 
             latest_candle = post_945_df.iloc[-1]
-            candle_close_5m = latest_candle['close']
+            candle_close_1m = latest_candle['close']
             current_price = latest_candle['close']
             current_vwap = latest_candle['vwap']
             
@@ -275,7 +275,7 @@ def scan_morning_range(kite):
             low_945 = info["low_945"]
             mid_point = (high_945 + low_945) / 2
             
-            # Calculate volume spike ratio (breakout candle vs 5-candle avg volume)
+            # Calculate volume spike ratio (breakout 1m candle vs 5-candle avg 1m volume)
             volume_ratio = 1.0
             if len(df) >= 7:
                 prev_candles = df.iloc[-6:-1]
@@ -307,25 +307,25 @@ def scan_morning_range(kite):
             c_range = c_high - c_low
             if c_range > 0:
                 if info["classification"] == "STRONG":
-                    body_ratio = (candle_close_5m - c_low) / c_range
+                    body_ratio = (candle_close_1m - c_low) / c_range
                     if body_ratio < 0.70:
                         return None
                 elif info["classification"] == "WEAK":
-                    body_ratio = (c_high - candle_close_5m) / c_range
+                    body_ratio = (c_high - candle_close_1m) / c_range
                     if body_ratio < 0.70:
                         return None
 
-            # 4. Overextension Check (Closeness to VWAP within 1.2%)
+            # 4. Tighter Overextension Check (Closeness to VWAP within 1.0%)
             if info["classification"] == "STRONG":
-                if current_price > current_vwap * 1.012:
+                if current_price > current_vwap * 1.010:
                     return None
             elif info["classification"] == "WEAK":
-                if current_price < current_vwap * 0.988:
+                if current_price < current_vwap * 0.990:
                     return None
 
-            # LONG TRIGGER (STRONG)
+            # LONG TRIGGER (STRONG) - 0.15% Level Buffer
             if info["classification"] == "STRONG":
-                if nifty_trend == "BULLISH" and candle_close_5m > high_945 and current_price > current_vwap and volume_ratio >= 1.5:
+                if nifty_trend == "BULLISH" and candle_close_1m >= (high_945 * 1.0015) and current_price > current_vwap and volume_ratio >= 1.5:
                     sl = max(current_vwap, mid_point)
                     tp = current_price + (2 * (current_price - sl))
                     return {
@@ -339,9 +339,9 @@ def scan_morning_range(kite):
                         "volume_ratio": float(volume_ratio)
                     }
             
-            # SHORT TRIGGER (WEAK)
+            # SHORT TRIGGER (WEAK) - 0.15% Level Buffer
             elif info["classification"] == "WEAK":
-                if nifty_trend == "BEARISH" and candle_close_5m < low_945 and current_price < current_vwap and volume_ratio >= 1.5:
+                if nifty_trend == "BEARISH" and candle_close_1m <= (low_945 * 0.9985) and current_price < current_vwap and volume_ratio >= 1.5:
                     sl = min(current_vwap, mid_point)
                     tp = current_price - (2 * (sl - current_price))
                     return {
