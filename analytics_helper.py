@@ -300,6 +300,13 @@ def render_analytics_tab(portfolio_df=None):
         </style>
     """, unsafe_allow_html=True)
     
+    # ------------------ FILTER DATAFRAME FIRST BY DATE ------------------
+    date_filtered_df = all_trades_df.copy()
+    if 'date_range_val' in st.session_state and isinstance(st.session_state.date_range_val, tuple) and len(st.session_state.date_range_val) == 2:
+        start_dt = pd.to_datetime(st.session_state.date_range_val[0]).tz_localize(None)
+        end_dt = pd.to_datetime(st.session_state.date_range_val[1]).tz_localize(None) + datetime.timedelta(days=1)
+        date_filtered_df = date_filtered_df[(date_filtered_df['ExitTime'] >= start_dt) & (date_filtered_df['ExitTime'] < end_dt)]
+    
     # ------------------ FILTER PANEL ------------------
     with st.expander("🎛️ Advanced Control Desk & Filters", expanded=True):
         col_pres, col_cal = st.columns([3, 2])
@@ -354,15 +361,17 @@ def render_analytics_tab(portfolio_df=None):
         col_fil1, col_fil2, col_fil3 = st.columns(3)
         
         with col_fil1:
-            all_classes = sorted(all_trades_df['AssetClass'].unique().tolist())
+            all_classes = sorted(date_filtered_df['AssetClass'].unique().tolist()) if not date_filtered_df.empty else []
             selected_classes = st.multiselect("Asset Class Selection", options=all_classes, default=all_classes, key="mult_assets")
             
         with col_fil2:
-            # Dynamically derive available strategies based on chosen asset classes
-            if selected_classes:
-                available_strats = sorted(all_trades_df[all_trades_df['AssetClass'].isin(selected_classes)]['Strategy'].unique().tolist())
+            # Dynamically derive available strategies based on chosen asset classes within selected date range
+            if not date_filtered_df.empty and selected_classes:
+                available_strats = sorted(date_filtered_df[date_filtered_df['AssetClass'].isin(selected_classes)]['Strategy'].unique().tolist())
+            elif not date_filtered_df.empty:
+                available_strats = sorted(date_filtered_df['Strategy'].unique().tolist())
             else:
-                available_strats = sorted(all_trades_df['Strategy'].unique().tolist())
+                available_strats = []
                 
             selected_strats = st.multiselect("Strategy Filter", options=available_strats, default=available_strats, key="mult_strats")
             
@@ -370,7 +379,7 @@ def render_analytics_tab(portfolio_df=None):
             capital_base = st.number_input("Capital Base (₹) for ROI & Drawdown %", min_value=10000.0, value=500000.0, step=50000.0, key="cap_base_input")
 
     # Filter Data based on selections
-    filtered_df = all_trades_df.copy()
+    filtered_df = date_filtered_df.copy()
     if selected_classes:
         filtered_df = filtered_df[filtered_df['AssetClass'].isin(selected_classes)]
     else:
@@ -380,12 +389,6 @@ def render_analytics_tab(portfolio_df=None):
         filtered_df = filtered_df[filtered_df['Strategy'].isin(selected_strats)]
     elif not filtered_df.empty:
         filtered_df = pd.DataFrame(columns=filtered_df.columns)
-        
-    # Handle date range filtering
-    if not filtered_df.empty:
-        start_dt = pd.to_datetime(st.session_state.date_range_val[0]).tz_localize(None)
-        end_dt = pd.to_datetime(st.session_state.date_range_val[1]).tz_localize(None) + datetime.timedelta(days=1)
-        filtered_df = filtered_df[(filtered_df['ExitTime'] >= start_dt) & (filtered_df['ExitTime'] < end_dt)]
         
     if filtered_df.empty:
         st.warning("⚠️ No trades matched the current filter configuration. Change dates or select different classes/strategies.")
