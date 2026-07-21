@@ -2160,7 +2160,7 @@ cache_files = {
     "52-Week High Breakout (Kite)": os.path.join("data", "cache", "high52_cache.csv"),
     "15-Min Bearish Breakdown (Kite)": os.path.join("data", "cache", "bearish_breakdown_cache.csv"),
     "15-Min Bullish Breakout (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv"),
-    "Failed Breakout Short (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv"),
+    "Failed Breakout Short (Kite)": os.path.join("data", "cache", "failed_breakout_cache.csv"),
     "Morning Range Watchlist (Kite)": os.path.join("data", "state", ".morning_range_watchlist.json")
 }
 
@@ -3018,7 +3018,8 @@ if active_tab == "🔍 Scanners":
         "15-Min ORB Breakout (Kite)": os.path.join("data", "cache", "orb_trending_cache.csv"),
         "52-Week High Breakout (Kite)": os.path.join("data", "cache", "high52_cache.csv"),
         "15-Min Bearish Breakdown (Kite)": os.path.join("data", "cache", "bearish_breakdown_cache.csv"),
-        "15-Min Bullish Breakout / Failed Breakout (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv"),
+        "15-Min Bullish Breakout (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv"),
+        "Failed Breakout Short (Kite)": os.path.join("data", "cache", "failed_breakout_cache.csv"),
         "Morning Range Watchlist (Kite)": os.path.join("data", "state", ".morning_range_watchlist.json")
     }
 

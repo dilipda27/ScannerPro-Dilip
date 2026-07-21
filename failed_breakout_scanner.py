@@ -10,26 +10,25 @@ import scanner
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-FAILED_CACHE_FILE = os.path.join("data", "cache", "fno_strength_cache.csv")
+FAILED_CACHE_FILE = os.path.join("data", "cache", "failed_breakout_cache.csv")
 
 def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
     """
-    Phase 1: Pre-Market F&O "Strength" Filter (9:00 AM - 9:15 AM)
-    We shortlist structurally strong stocks because they are the ones that will rally 
-    and attempt to break morning resistance levels (Yesterday's High / ORB High), 
-    setting up a potential failed breakout (Bull Trap) short.
+    Phase 1: Pre-Market F&O Failed Breakout Caching (9:00 AM - 9:15 AM)
+    Shortlists F&O candidates that are trading near overhead resistance (Yesterday's High / ORB High)
+    but are NOT in strong daily momentum (Price < 20 EMA or Daily RSI <= 53).
     """
-    logging.info("🚀 Starting Phase 1: Pre-Market F&O Failed Breakout Caching...")
+    logging.info("🚀 Starting Phase 1: Dedicated Pre-Market Failed Breakout Caching...")
     
     if refresh_only and os.path.exists(FAILED_CACHE_FILE):
         cache_df = pd.read_csv(FAILED_CACHE_FILE)
         symbols = cache_df['Ticker'].tolist()
-        logging.info(f"Refreshing {len(symbols)} candidates with today's early strength...")
+        logging.info(f"Refreshing {len(symbols)} candidates with today's early price action...")
     else:
         # Full scan: Get all F&O tickers
         fno_tickers_ns = scanner.get_nifty500_fno_tickers()
         symbols = [s.replace(".NS", "") for s in fno_tickers_ns]
-        logging.info(f"Scanning all {len(symbols)} F&O tickers for structural strength...")
+        logging.info(f"Scanning all {len(symbols)} F&O tickers for resistance-rejection setups...")
     
     token_map = kite_scanner.get_kite_instruments(kite, symbols)
     
@@ -55,24 +54,30 @@ def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
                 continue
                 
             # Calculate indicators
+            df_daily.ta.ema(length=20, append=True)
             df_daily.ta.ema(length=50, append=True)
             df_daily.ta.rsi(length=14, append=True)
             
             latest = df_daily.iloc[-1]
             prev = df_daily.iloc[-2]
             
-            # --- PHASE 1 STRENGTH CRITERIA ---
-            # 1. Price above 50 EMA and RSI > 50 (Strong short-term structural daily trend)
-            is_strong = latest['close'] > latest['EMA_50'] and latest['RSI_14'] > 50
+            # --- SEPARATED FAILED BREAKOUT SELECTION CRITERIA ---
+            # 1. Macro Trend: Reject strong daily momentum stocks (Must be below 20 EMA or Daily RSI <= 53)
+            not_strong_momentum = (latest['close'] < latest['EMA_20']) or (latest['RSI_14'] <= 53.0)
             
             # 2. Yesterday's High (Correctly handle pre-market vs post-open)
             today_date = datetime.date.today()
             if latest.name.date() == today_date:
                 pdh = prev['high']
+                prev_close = prev['close']
             else:
                 pdh = latest['high']
+                prev_close = latest['close']
             
-            # 3. Early Momentum Filter (If refreshing between 9:20 - 9:30)
+            # 3. Overhead Resistance Proximity: Price must be near Yesterday's High (within 4%)
+            near_resistance = prev_close >= pdh * 0.96
+            
+            # 4. Early Momentum Filter (If refreshing between 9:25 - 9:30)
             if refresh_only:
                 from_intra = to_date.replace(hour=9, minute=15, second=0, microsecond=0)
                 if from_intra > to_date:
@@ -81,19 +86,21 @@ def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
                 if not df_intra.empty:
                     today_open = df_intra.iloc[0]['open']
                     today_ltp = df_intra.iloc[-1]['close']
-                    # Must be gapping up or trading above open and near Yesterday's High early
-                    if today_ltp < today_open or today_ltp < pdh * 0.99: 
+                    today_high = df_intra['high'].max()
+                    # Skip if stock is gapping up sharply or trading far above PDH
+                    if today_ltp > pdh * 1.015 or today_high < pdh * 0.985: 
                         continue
             
-            if is_strong:
+            if not_strong_momentum and near_resistance:
                 cache_data.append({
                     "Ticker": symbol,
                     "Token": token,
-                    "Prev_Close": prev['close'],
+                    "Prev_Close": prev_close,
                     "Yesterday_High": round(pdh, 2),
+                    "EMA_20": round(latest['EMA_20'], 2),
                     "EMA_50": round(latest['EMA_50'], 2),
                     "RSI": round(latest['RSI_14'], 2),
-                    "Avg_15m_Vol": 0.0 # Will be populated next
+                    "Avg_15m_Vol": 0.0
                 })
         except Exception as e:
             logging.error(f"Error filtering {symbol}: {e}")
@@ -114,9 +121,10 @@ def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
             except: pass
             
         cache_df.to_csv(FAILED_CACHE_FILE, index=False)
-        logging.info(f"Phase 1 Complete. {len(cache_df)} F&O candidates cached.")
+        logging.info(f"Phase 1 Complete. {len(cache_df)} F&O Failed Breakout candidates cached into '{FAILED_CACHE_FILE}'.")
         return True
     
+    logging.info("Phase 1 Complete. No candidates matched Failed Breakout criteria.")
     return False
 
 def calculate_vwap(df):
@@ -134,7 +142,7 @@ def scan_failed_breakouts(kite, progress_callback=None):
     logging.info("🔍 Starting Intraday Failed Breakout (Bull Trap) Scan...")
     
     if not os.path.exists(FAILED_CACHE_FILE):
-        logging.error("Failed breakout cache file not found. Run Phase 1 first.")
+        logging.error(f"Failed breakout cache file '{FAILED_CACHE_FILE}' not found. Run Phase 1 first.")
         return pd.DataFrame()
         
     cache_df = pd.read_csv(FAILED_CACHE_FILE)
@@ -164,15 +172,17 @@ def scan_failed_breakouts(kite, progress_callback=None):
                 nifty_open = nifty_df.iloc[0]['open']
                 nifty_ltp = nifty_df.iloc[-1]['close']
                 nifty_change_pct = (nifty_ltp - nifty_open) / nifty_open
-                nifty_bullish = nifty_change_pct > 0.0010
+                nifty_bullish = nifty_change_pct > 0.0005 # Nifty up > 0.05%
                 logging.info(f"Broad Market Check -> Nifty Open: {nifty_open:.2f}, LTP: {nifty_ltp:.2f} | Change %: {nifty_change_pct*100:.3f}% | Bullish? {nifty_bullish}")
     except Exception as ne:
         logging.warning(f"Failed to fetch Nifty 50 trend: {ne}")
         
-    # --- BATCH PRE-SCREEN (Speed Optimization) ---
-    # Fetch OHLC for all cached candidates in one call.
-    # Since we want to detect failed breakouts, the stock must have tested or breached yesterday's high at some point today.
-    # So we check if today's high in the quote is near or above yesterday's high.
+    # STRICT RULE: Reject short trades if broad market is bullish
+    if nifty_bullish:
+        logging.info("🛑 Broad Market (Nifty 50) is Bullish today. Skipping Failed Breakout Short triggers.")
+        return pd.DataFrame()
+
+    # --- BATCH PRE-SCREEN ---
     logging.info(f"Pre-screening {total} candidates with batch quotes...")
     try:
         all_tickers = [f"NSE:{s}" for s in cache_df['Ticker']]
@@ -214,7 +224,6 @@ def scan_failed_breakouts(kite, progress_callback=None):
             if df_intra.empty:
                 continue
                 
-            # Calculate 5-minute indicators
             df_intra.ta.rsi(length=14, append=True)
             df_intra['Vol_Avg_5'] = df_intra['volume'].rolling(window=20).mean()
             
@@ -222,14 +231,13 @@ def scan_failed_breakouts(kite, progress_callback=None):
             if df_today.empty or len(df_today) < 4:
                 continue
                 
-            # Define 15-minute Opening Range (first 3 candles: 9:15, 9:20, 9:25)
+            # Define 15-minute Opening Range
             or_candles = df_today.iloc[0:3]
             or_high = or_candles['high'].max()
             
             # Structural Resistance Level (R)
             R = max(pdh, or_high)
             
-            # Subsequent candles (after 9:30 AM)
             subsequent = df_today.iloc[3:]
             if subsequent.empty:
                 continue
@@ -242,13 +250,11 @@ def scan_failed_breakouts(kite, progress_callback=None):
             # Identify the highest price of the breakout move for SL calculation
             failed_swing_high = df_today.iloc[3:]['high'].max()
             
-            # --- TRIGGER CONFIRMATION (Smart Completion Logic) ---
-            # Check if the latest candle in df_today is fully completed
+            # --- TRIGGER CONFIRMATION ---
             latest_candle = df_today.iloc[-1]
             ltp = latest_candle['close']
             candle_start = latest_candle.name
             
-            # Safe timezone-agnostic datetime comparison
             t_now_naive = to_date.replace(tzinfo=None) if to_date.tzinfo is not None else to_date
             c_start_pydt = candle_start.to_pydatetime() if hasattr(candle_start, 'to_pydatetime') else candle_start
             c_start_naive = c_start_pydt.replace(tzinfo=None) if c_start_pydt.tzinfo is not None else c_start_pydt
@@ -267,18 +273,14 @@ def scan_failed_breakouts(kite, progress_callback=None):
             # 2. Failure/Trap Trigger: Confirmed close back below resistance level R
             is_trap_triggered = confirmed_close < R
             
-            # 3. Bearish Rejection Shape: Close must be in the lower half of the candle's range
-            candle_range = confirmed_high - confirmed_low
-            is_bearish_shape = confirmed_close < (confirmed_high + confirmed_low) / 2 if candle_range > 0 else True
-            
-            # 3b. Robust Bearish Candlestick Shape: Must be a red candle OR have a long upper shadow (shooting star / pinbar shape)
+            # 3. Bearish Rejection Shape: Red candle OR shooting star shape
             confirmed_open = confirmed_candle['open']
             is_red = confirmed_close < confirmed_open
             body_size = abs(confirmed_close - confirmed_open)
             upper_wick = confirmed_high - max(confirmed_open, confirmed_close)
             is_bearish_rejection = is_red or (upper_wick > 1.5 * body_size if body_size > 0 else True)
             
-            # 3c. Breakout Duration Constraint: Count consecutive candles closed above R before the trigger candle
+            # 3b. Trap Duration Constraint: Max 2 candles (10 mins) above resistance
             consecutive_above = 0
             try:
                 idx_trigger = df_today.index.get_loc(confirmed_candle.name)
@@ -292,33 +294,29 @@ def scan_failed_breakouts(kite, progress_callback=None):
                 logging.warning(f"Error calculating consecutive candles above R: {ex}")
                 consecutive_above = 0
                 
-            # 4. Volume Spike Confirmation: Volume on trigger/breakout is high
+            # 4. Volume Spike Confirmation: Volume on trigger rejection candle is high (>= 1.5x)
             vol_spike = confirmed_volume >= 1.5 * confirmed_vol_avg if confirmed_vol_avg > 0 else True
             
             # 5. Intraday Trend Alignment: Below VWAP
             vwap = calculate_vwap(df_today)
             below_vwap = ltp < vwap
             
-            # 6. RSI Buffer: 5-min RSI > 40 (room to fall, not oversold)
+            # 6. RSI Buffer: 5-min RSI > 38 (not oversold)
             latest_rsi = latest_candle['RSI_14'] if 'RSI_14' in latest_candle else 50
-            not_oversold = latest_rsi > 40
+            not_oversold = latest_rsi > 38
             
             # 7. No-Chase Rule: Slippage is <= 0.4% from resistance level R
             slippage_pct = (R - ltp) / R * 100
             is_chasing = slippage_pct > 0.4
             
-            # Combine all conditions (incorporating the new consecutive_above and bearish rejection shape filters)
-            if is_trap_triggered and is_bearish_shape and is_bearish_rejection and (consecutive_above <= 4) and vol_spike and below_vwap and not_oversold and not is_chasing:
-                # Active Trading Hours (Post-9:30 AM and Before 2:00 PM)
+            # Combine all upgraded filters (including max 2-candle trap duration)
+            if is_trap_triggered and is_bearish_rejection and (consecutive_above <= 2) and vol_spike and below_vwap and not_oversold and not is_chasing:
                 if datetime.time(9, 30) <= to_date.time() <= datetime.time(14, 0):
-                    # Risk Management parameters
                     entry_price = ltp
                     qty = int(250000 / entry_price)
                     
-                    # Stop Loss: swing high * 1.001
                     sl_calculated = failed_swing_high * 1.001
-                    # Enforce strict safety constraints (Min 0.5%, Max 2.0% SL)
-                    stop_loss = max(sl_calculated, entry_price * 1.005)
+                    stop_loss = max(sl_calculated, entry_price * 1.0075) # Minimum 0.75% SL buffer
                     stop_loss = min(stop_loss, entry_price * 1.02)
                     
                     risk = stop_loss - entry_price
@@ -340,39 +338,6 @@ def scan_failed_breakouts(kite, progress_callback=None):
                         "Token": token
                      })
                     logging.info(f"🔴 Failed Breakout Short Detected: {symbol} at {entry_price}")
-                else:
-                    results.append({
-                        "Ticker": symbol,
-                        "Entry Price": "Wait for trigger < " + str(round(R, 2)),
-                        "Qty": str(int(250000 / ltp)),
-                        "Invested Capital": "-",
-                        "Yesterday High": round(pdh, 2),
-                        "OR High": round(or_high, 2),
-                        "Resistance Level (R)": round(R, 2),
-                        "VWAP": round(vwap, 2),
-                        "RSI (5m)": round(latest_rsi, 2),
-                        "Stop Loss": "-",
-                        "Target": "-",
-                        "Status": "Closed for Day" if to_date.time() > datetime.time(14, 0) else "Monitoring",
-                        "Token": token
-                    })
-            else:
-                # Still monitor if breakout attempt occurred but not yet triggered or filtered out
-                results.append({
-                    "Ticker": symbol,
-                    "Entry Price": "Monitoring / Filtered",
-                    "Qty": str(int(250000 / ltp)),
-                    "Invested Capital": "-",
-                    "Yesterday High": round(pdh, 2),
-                    "OR High": round(or_high, 2),
-                    "Resistance Level (R)": round(R, 2),
-                    "VWAP": round(vwap, 2),
-                    "RSI (5m)": round(latest_rsi, 2),
-                    "Stop Loss": "-",
-                    "Target": "-",
-                    "Status": "Closed for Day" if to_date.time() > datetime.time(14, 0) else "Monitoring",
-                    "Token": token
-                })
         except Exception as e:
             logging.error(f"Error scanning {symbol}: {e}")
             continue

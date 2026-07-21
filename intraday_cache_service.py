@@ -228,7 +228,8 @@ def print_caching_summary():
         "15-Min ORB Breakout": os.path.join("data", "cache", "orb_trending_cache.csv"),
         "52-Week High Breakout": os.path.join("data", "cache", "high52_cache.csv"),
         "15-Min Bearish Breakdown": os.path.join("data", "cache", "bearish_breakdown_cache.csv"),
-        "15-Min Bullish Breakout / Failed Breakout": os.path.join("data", "cache", "fno_strength_cache.csv")
+        "15-Min Bullish Breakout": os.path.join("data", "cache", "fno_strength_cache.csv"),
+        "Failed Breakout Short": os.path.join("data", "cache", "failed_breakout_cache.csv")
     }
     
     for name, path in cache_files.items():
