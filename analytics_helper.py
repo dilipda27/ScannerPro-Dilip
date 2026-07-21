@@ -315,32 +315,39 @@ def render_analytics_tab(portfolio_df=None):
             st.markdown("<p style='font-size:0.85rem; font-weight:600; color:#475569; margin-bottom:5px;'>📅 TIMEFRAME PRESETS</p>", unsafe_allow_html=True)
             presets = ["Today", "Last 7 Days", "Last 30 Days", "Month to Date", "Year to Date", "All Time"]
             p_cols = st.columns(len(presets))
+            
+            # Function to calculate preset dates for comparison
+            def get_preset_dates(p_name):
+                today = datetime.date.today()
+                if p_name == "Today":
+                    s, e = today, today
+                elif p_name == "Last 7 Days":
+                    s, e = today - datetime.timedelta(days=7), today
+                elif p_name == "Last 30 Days":
+                    s, e = today - datetime.timedelta(days=30), today
+                elif p_name == "Month to Date":
+                    s, e = today.replace(day=1), today
+                elif p_name == "Year to Date":
+                    s, e = today.replace(month=1, day=1), today
+                elif p_name == "All Time":
+                    s, e = min_date, max_date
+                else:
+                    return None, None
+                s = max(min_date, s)
+                e = min(max_date, e)
+                if s > e: s = e
+                return s, e
+
+            curr_s, curr_e = st.session_state.date_range_val[0], st.session_state.date_range_val[1]
+
             for idx, p_name in enumerate(presets):
+                target_s, target_e = get_preset_dates(p_name)
+                is_active = (curr_s == target_s and curr_e == target_e)
+                
                 if p_cols[idx].button(p_name, key=f"p_btn_{p_name}", use_container_width=True,
-                                      type="primary" if st.session_state.preset_date_choice == p_name else "secondary"):
+                                      type="primary" if is_active else "secondary"):
                     st.session_state.preset_date_choice = p_name
-                    today = datetime.date.today()
-                    
-                    if p_name == "Today":
-                        start_val, end_val = today, today
-                    elif p_name == "Last 7 Days":
-                        start_val, end_val = today - datetime.timedelta(days=7), today
-                    elif p_name == "Last 30 Days":
-                        start_val, end_val = today - datetime.timedelta(days=30), today
-                    elif p_name == "Month to Date":
-                        start_val, end_val = today.replace(day=1), today
-                    elif p_name == "Year to Date":
-                        start_val, end_val = today.replace(month=1, day=1), today
-                    elif p_name == "All Time":
-                        start_val, end_val = min_date, max_date
-                        
-                    # Cap dates to historical bounds to prevent Streamlit date_input bounds exception
-                    start_val = max(min_date, start_val)
-                    end_val = min(max_date, end_val)
-                    if start_val > end_val:
-                        start_val = end_val
-                        
-                    st.session_state.date_range_val = (start_val, end_val)
+                    st.session_state.date_range_val = (target_s, target_e)
                     # Clear multiselect state keys so Streamlit defaults cleanly to the new date range options
                     st.session_state.pop("mult_assets", None)
                     st.session_state.pop("mult_strats", None)
