@@ -62,8 +62,8 @@ def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
             prev = df_daily.iloc[-2]
             
             # --- SEPARATED FAILED BREAKOUT SELECTION CRITERIA ---
-            # 1. Macro Trend: Reject strong daily momentum stocks (Must be below 20 EMA or Daily RSI <= 53)
-            not_strong_momentum = (latest['close'] < latest['EMA_20']) or (latest['RSI_14'] <= 53.0)
+            # 1. Macro Downtrend/Pullback: Must be BELOW 20 EMA AND Daily RSI <= 52.0 (True resistance candidate)
+            is_macro_bearish = (latest['close'] < latest['EMA_20']) and (latest['RSI_14'] <= 52.0)
             
             # 2. Yesterday's High (Correctly handle pre-market vs post-open)
             today_date = datetime.date.today()
@@ -74,8 +74,8 @@ def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
                 pdh = latest['high']
                 prev_close = latest['close']
             
-            # 3. Overhead Resistance Proximity: Price must be near Yesterday's High (within 4%)
-            near_resistance = prev_close >= pdh * 0.96
+            # 3. Tight Resistance Proximity: Price starts within 3.5% of Yesterday's High
+            near_resistance = (pdh * 0.965 <= prev_close <= pdh * 1.01)
             
             # 4. Early Momentum Filter (If refreshing between 9:25 - 9:30)
             if refresh_only:
@@ -91,7 +91,7 @@ def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
                     if today_ltp > pdh * 1.015 or today_high < pdh * 0.985: 
                         continue
             
-            if not_strong_momentum and near_resistance:
+            if is_macro_bearish and near_resistance:
                 cache_data.append({
                     "Ticker": symbol,
                     "Token": token,
