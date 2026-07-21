@@ -2352,6 +2352,15 @@ if any(s in KITE_STRATEGIES for s in selected_strategies):
                             )
                     p_bar.empty()
             
+            
+            # Print and log the caching summary in the log/terminal
+            try:
+                import intraday_cache_service
+                intraday_cache_service.print_caching_summary()
+            except Exception as e:
+                import logging
+                logging.error(f"Error printing caching summary: {e}")
+
             st.success("✅ Bulk Caching Complete!")
             st.rerun()
 

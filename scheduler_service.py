@@ -726,6 +726,11 @@ def run_morning_cache():
         # Run the ULTRA-OPTIMIZED unified cache (Handles both ORB and 52W High)
         kite_scanner.run_unified_morning_cache(kite)
         logging.info("✅ Morning tasks complete (Archiving + Unified Caching).")
+        try:
+            import intraday_cache_service
+            intraday_cache_service.print_caching_summary()
+        except Exception as e:
+            logging.error(f"Error printing caching summary in scheduler: {e}")
     except Exception as e:
         logging.error(f"Error during automated morning tasks: {e}")
 

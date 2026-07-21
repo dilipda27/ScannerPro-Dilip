@@ -201,6 +201,10 @@ class IntradayCacheService:
             if all_done:
                 self.status = "Completed for Today"
                 self.log("🏁 All intraday caching and refreshes completed for today. Going idle.")
+                try:
+                    print_caching_summary()
+                except Exception as e:
+                    logging.error(f"Error printing caching summary: {e}")
                 self.running = False
                 sys._cache_service_enabled = False
                 break
@@ -213,6 +217,59 @@ class IntradayCacheService:
         self.running = False
         self.status = "Ended / Stopped"
         self.log("🔴 Cache service loop ended.")
+
+def print_caching_summary():
+    """Prints a summary in the log/terminal of the number of stocks fetched/cached for each scanner."""
+    print("\n" + "="*65)
+    print("📋 INTRADAY CACHING SUMMARY (STOCKS CACHED)")
+    print("="*65)
+    
+    cache_files = {
+        "15-Min ORB Breakout": os.path.join("data", "cache", "orb_trending_cache.csv"),
+        "52-Week High Breakout": os.path.join("data", "cache", "high52_cache.csv"),
+        "15-Min Bearish Breakdown": os.path.join("data", "cache", "bearish_breakdown_cache.csv"),
+        "15-Min Bullish Breakout / Failed Breakout": os.path.join("data", "cache", "fno_strength_cache.csv")
+    }
+    
+    for name, path in cache_files.items():
+        count = 0
+        if os.path.exists(path):
+            try:
+                df = pd.read_csv(path)
+                count = len(df)
+            except Exception:
+                pass
+        logging.info(f"[Cache Summary] {name}: {count} stocks cached")
+        print(f" 🔹 {name:<45} : {count} stocks")
+
+    # VCP Specific Cache Files
+    vcp_prox_path = os.path.join("data", "cache", "proximity_filter_cache.json")
+    vcp_watch_path = os.path.join("data", "cache", "volatility_contraction_watchlist.json")
+    
+    vcp_prox_count = 0
+    if os.path.exists(vcp_prox_path):
+        try:
+            with open(vcp_prox_path, "r") as f:
+                data = json.load(f)
+                vcp_prox_count = len(data)
+        except Exception:
+            pass
+            
+    vcp_watch_count = 0
+    if os.path.exists(vcp_watch_path):
+        try:
+            with open(vcp_watch_path, "r") as f:
+                data = json.load(f)
+                vcp_watch_count = len(data)
+        except Exception:
+            pass
+            
+    logging.info(f"[Cache Summary] VCP Proximity Filter: {vcp_prox_count} stocks cached")
+    logging.info(f"[Cache Summary] VCP Setup watchlist: {vcp_watch_count} stocks cached")
+    print(f" 🔹 VCP Proximity Filter                         : {vcp_prox_count} stocks")
+    print(f" 🔹 VCP Setup Watchlist                          : {vcp_watch_count} stocks")
+    print("="*65 + "\n")
+
 
 def start_service():
     """Starts the caching service in a background daemon thread."""
