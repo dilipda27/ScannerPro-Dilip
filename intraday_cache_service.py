@@ -264,10 +264,23 @@ def print_caching_summary():
         except Exception:
             pass
             
+    mr_watch_path = os.path.join("data", "state", ".morning_range_watchlist.json")
+    mr_watch_count = 0
+    if os.path.exists(mr_watch_path):
+        try:
+            with open(mr_watch_path, "r") as f:
+                data = json.load(f)
+                if isinstance(data, dict) and "watchlist" in data:
+                    mr_watch_count = len(data["watchlist"])
+        except Exception:
+            pass
+
     logging.info(f"[Cache Summary] VCP Proximity Filter: {vcp_prox_count} stocks cached")
     logging.info(f"[Cache Summary] VCP Setup watchlist: {vcp_watch_count} stocks cached")
+    logging.info(f"[Cache Summary] Morning Range Watchlist: {mr_watch_count} stocks cached")
     print(f" 🔹 VCP Proximity Filter                         : {vcp_prox_count} stocks")
     print(f" 🔹 VCP Setup Watchlist                          : {vcp_watch_count} stocks")
+    print(f" 🔹 Morning Range Watchlist                      : {mr_watch_count} stocks")
     print("="*65 + "\n")
 
 

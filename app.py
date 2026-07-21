@@ -2138,6 +2138,16 @@ selected_strategies = selected_intraday + selected_swing
 def get_cache_count(file_path):
     if os.path.exists(file_path):
         try:
+            if file_path.endswith(".json"):
+                with open(file_path, "r") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    if "watchlist" in data and isinstance(data["watchlist"], dict):
+                        return len(data["watchlist"])
+                    return len(data)
+                elif isinstance(data, list):
+                    return len(data)
+                return 0
             df = pd.read_csv(file_path)
             return len(df)
         except: return 0
@@ -2150,7 +2160,8 @@ cache_files = {
     "52-Week High Breakout (Kite)": os.path.join("data", "cache", "high52_cache.csv"),
     "15-Min Bearish Breakdown (Kite)": os.path.join("data", "cache", "bearish_breakdown_cache.csv"),
     "15-Min Bullish Breakout (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv"),
-    "Failed Breakout Short (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv")
+    "Failed Breakout Short (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv"),
+    "Morning Range Watchlist (Kite)": os.path.join("data", "state", ".morning_range_watchlist.json")
 }
 
 for s in selected_strategies:
@@ -3007,13 +3018,32 @@ if active_tab == "🔍 Scanners":
         "15-Min ORB Breakout (Kite)": os.path.join("data", "cache", "orb_trending_cache.csv"),
         "52-Week High Breakout (Kite)": os.path.join("data", "cache", "high52_cache.csv"),
         "15-Min Bearish Breakdown (Kite)": os.path.join("data", "cache", "bearish_breakdown_cache.csv"),
-        "15-Min Bullish Breakout / Failed Breakout (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv")
+        "15-Min Bullish Breakout / Failed Breakout (Kite)": os.path.join("data", "cache", "fno_strength_cache.csv"),
+        "Morning Range Watchlist (Kite)": os.path.join("data", "state", ".morning_range_watchlist.json")
     }
 
     for label, filename in cache_details.items():
         if os.path.exists(filename):
             try:
-                cache_df = pd.read_csv(filename)
+                if filename.endswith(".json"):
+                    with open(filename, "r") as f:
+                        data = json.load(f)
+                    watchlist_dict = data.get("watchlist", {}) if isinstance(data, dict) else {}
+                    rows = []
+                    for ticker, info in watchlist_dict.items():
+                        rows.append({
+                            "Ticker": ticker,
+                            "Classification": info.get("classification"),
+                            "Open (9:15)": info.get("open_915"),
+                            "High (9:45)": info.get("high_945"),
+                            "Low (9:45)": info.get("low_945"),
+                            "Daily 50 EMA": round(info.get("daily_50_ema", 0), 2) if info.get("daily_50_ema") else 0,
+                            "Daily 14 ATR": round(info.get("daily_atr_14", 0), 2) if info.get("daily_atr_14") else 0
+                        })
+                    cache_df = pd.DataFrame(rows)
+                else:
+                    cache_df = pd.read_csv(filename)
+
                 if not cache_df.empty:
                     with st.expander(f"📁 {label} ({len(cache_df)} stocks cached)", expanded=False):
                         st.dataframe(cache_df, width="stretch")
