@@ -31,10 +31,10 @@ class IntradayCacheService:
             {"id": "bullish_strength", "name": "Full F&O Strength Cache", "scheduled_time": "09:10", "run_missed": True},
             {"id": "bearish_breakdown", "name": "Full Bearish Breakdown Cache", "scheduled_time": "09:10", "run_missed": True},
             {"id": "vcp_caching", "name": "VCP Proximity & Setup validation", "scheduled_time": "09:10", "run_missed": True},
-            {"id": "refresh_orb", "name": "Refresh ORB Cache (Today's Open)", "scheduled_time": "09:20", "run_missed": False},
-            {"id": "refresh_bullish", "name": "Refresh Bullish Breakout Cache", "scheduled_time": "09:20", "run_missed": False},
-            {"id": "refresh_bearish", "name": "Refresh Bearish Breakdown Cache", "scheduled_time": "09:20", "run_missed": False},
-            {"id": "refresh_failed", "name": "Refresh Failed Breakout Cache", "scheduled_time": "09:20", "run_missed": False}
+            {"id": "refresh_orb", "name": "Refresh ORB Cache (Today's Open)", "scheduled_time": "09:25", "run_missed": False},
+            {"id": "refresh_bullish", "name": "Refresh Bullish Breakout Cache", "scheduled_time": "09:25", "run_missed": False},
+            {"id": "refresh_bearish", "name": "Refresh Bearish Breakdown Cache", "scheduled_time": "09:25", "run_missed": False},
+            {"id": "refresh_failed", "name": "Refresh Failed Breakout Cache", "scheduled_time": "09:25", "run_missed": False}
         ]
 
     def log(self, message):
