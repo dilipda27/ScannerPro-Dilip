@@ -341,6 +341,9 @@ def render_analytics_tab(portfolio_df=None):
                         start_val = end_val
                         
                     st.session_state.date_range_val = (start_val, end_val)
+                    # Clear multiselect state keys so Streamlit defaults cleanly to the new date range options
+                    st.session_state.pop("mult_assets", None)
+                    st.session_state.pop("mult_strats", None)
                     st.rerun()
                     
         with col_cal:
@@ -355,6 +358,8 @@ def render_analytics_tab(portfolio_df=None):
                 if selected_range != st.session_state.date_range_val:
                     st.session_state.date_range_val = selected_range
                     st.session_state.preset_date_choice = "Custom"
+                    st.session_state.pop("mult_assets", None)
+                    st.session_state.pop("mult_strats", None)
                     st.rerun()
                     
         st.markdown("<hr style='margin:10px 0; border:0.5px solid #f1f5f9;' />", unsafe_allow_html=True)
