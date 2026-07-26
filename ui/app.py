@@ -2300,8 +2300,8 @@ st.sidebar.subheader("📅 Scheduled Cache Service")
 from services import intraday_cache_service
 service_state = intraday_cache_service.get_service_status()
 
-# Auto-trigger caching service if user is logged in, no cache is populated, and service is idle
-if st.session_state.get('kite_access_token') and not _any_cache_populated and not service_state["running"]:
+# Auto-trigger caching service if user is logged in, no cache is populated, and service is idle (and not manually stopped)
+if st.session_state.get('kite_access_token') and not _any_cache_populated and not service_state["running"] and not st.session_state.get('caching_manually_stopped', False):
     success, msg = intraday_cache_service.start_service()
     if success:
         service_state = intraday_cache_service.get_service_status()
@@ -2332,6 +2332,7 @@ if service_state["running"]:
     # Stop button
     if st.sidebar.button("🛑 Stop Caching Service", width="stretch"):
         intraday_cache_service.stop_service()
+        st.session_state.caching_manually_stopped = True
         st.toast("Stopped background Caching Service.", icon="🛑")
         st.rerun()
 else:
@@ -2340,6 +2341,7 @@ else:
         if not st.session_state.kite_access_token:
             st.sidebar.error("🔒 Authenticate with Kite first.")
         else:
+            st.session_state.caching_manually_stopped = False
             success, msg = intraday_cache_service.start_service()
             if success:
                 st.toast("📡 Background Caching Service Started!", icon="🟢")
