@@ -880,7 +880,7 @@ def update_portfolio_pnl(kite):
             for und, items in underlying_groups.items():
                 qty = items[0][1]['Qty']
                 exch = "BFO" if und == "SENSEX" else "NFO"
-                import config
+                from core import config
                 lot_size = getattr(config, 'LOT_SIZE_SENSEX', 20) if und == "SENSEX" else getattr(config, 'LOT_SIZE_NIFTY', 65)
                 lots = qty / lot_size
                 

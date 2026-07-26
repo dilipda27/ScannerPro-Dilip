@@ -51,7 +51,7 @@ class IntradayCacheService:
         try:
             with open(session_file, "r") as f:
                 session = json.load(f)
-            import config
+            from core import config
             kite = KiteConnect(api_key=config.KITE_API_KEY)
             kite.set_access_token(session["access_token"])
             return kite

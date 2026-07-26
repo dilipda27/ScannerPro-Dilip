@@ -500,7 +500,7 @@ def send_telegram_alert_async(kite_client, symbol, token, last_price, sl_level, 
     def run():
         try:
             from services import telegram_agent
-            import config
+            from core import config
             from strategies import kite_scanner
             import pandas as pd
             
