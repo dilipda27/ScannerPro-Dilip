@@ -2300,14 +2300,6 @@ st.sidebar.subheader("📅 Scheduled Cache Service")
 from services import intraday_cache_service
 service_state = intraday_cache_service.get_service_status()
 
-# Auto-trigger caching service if user is logged in, no cache is populated, and service is idle (and not manually stopped)
-if st.session_state.get('kite_access_token') and not _any_cache_populated and not service_state["running"] and not st.session_state.get('caching_manually_stopped', False):
-    success, msg = intraday_cache_service.start_service()
-    if success:
-        service_state = intraday_cache_service.get_service_status()
-        st.toast("⚡ Caches are empty. Auto-started Caching Service in the background!", icon="🚀")
-        st.rerun()
-
 if service_state["running"]:
     st.sidebar.success(f"🟢 {service_state['status']}")
     
