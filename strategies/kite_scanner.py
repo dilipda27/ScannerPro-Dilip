@@ -252,23 +252,8 @@ def fetch_kite_data(kite, instrument_token, from_date, to_date, interval, retrie
                     df = pd.read_csv(cache_file)
                     if not df.empty:
                         df['date'] = pd.to_datetime(df['date'])
-                        
-                        # Validate that the cache has enough historical data for this request.
-                        # We allow a 10-day buffer for weekends/holidays around the requested start date.
-                        earliest_date_in_cache = df['date'].min()
-                        target_from_date = pd.to_datetime(from_date)
-                        
-                        # Strip timezones for safe comparison
-                        if earliest_date_in_cache.tzinfo is not None:
-                            earliest_date_in_cache = earliest_date_in_cache.tz_localize(None)
-                        if target_from_date.tzinfo is not None:
-                            target_from_date = target_from_date.tz_localize(None)
-                            
-                        if earliest_date_in_cache <= (target_from_date + pd.Timedelta(days=10)):
-                            df.set_index('date', inplace=True)
-                            return df
-                        else:
-                            logging.info(f"Cache for {instrument_token} is too short (starts {earliest_date_in_cache.date()}). Re-fetching...")
+                        df.set_index('date', inplace=True)
+                        return df
                 except Exception as cache_err:
                     logging.warning(f"Failed to read daily cache for {instrument_token}: {cache_err}")
                     
