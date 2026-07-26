@@ -178,8 +178,19 @@ def add_notification(ticker, msg, category="Breakout"):
 api_key = getattr(config, 'KITE_API_KEY', '')
 api_secret = getattr(config, 'KITE_API_SECRET', '')
 
-if 'kite_access_token' not in st.session_state:
+if 'kite_access_token' not in st.session_state or st.session_state.kite_access_token is None:
     st.session_state.kite_access_token = None
+    session_file = ".kite_session.json"
+    if os.path.exists(session_file):
+        try:
+            with open(session_file, "r") as f:
+                sess_data = json.load(f)
+            st.session_state.kite_access_token = sess_data.get("access_token")
+            st.session_state.kite_user_name = sess_data.get("user_name", "User")
+            st.session_state.kite_user_id = sess_data.get("user_id", "ID")
+            logging.info("Successfully auto-restored active Kite session from .kite_session.json.")
+        except Exception as se:
+            logging.error(f"Failed to auto-restore Kite session: {se}")
 
 # --- STICKY HEADER & LOGIN SECTION ---
 st.markdown('<div class="header-anchor"></div>', unsafe_allow_html=True)
@@ -2288,6 +2299,14 @@ st.sidebar.subheader("📅 Scheduled Cache Service")
 
 from services import intraday_cache_service
 service_state = intraday_cache_service.get_service_status()
+
+# Auto-trigger caching service if user is logged in, no cache is populated, and service is idle
+if st.session_state.get('kite_access_token') and not _any_cache_populated and not service_state["running"]:
+    success, msg = intraday_cache_service.start_service()
+    if success:
+        service_state = intraday_cache_service.get_service_status()
+        st.toast("⚡ Caches are empty. Auto-started Caching Service in the background!", icon="🚀")
+        st.rerun()
 
 if service_state["running"]:
     st.sidebar.success(f"🟢 {service_state['status']}")
