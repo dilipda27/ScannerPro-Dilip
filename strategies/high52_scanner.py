@@ -139,7 +139,7 @@ def scan_52w_breakouts(kite, progress_callback=None, only_closed_candles=True):
     
     if not os.path.exists(CACHE_FILE):
         logging.error("Cache file not found. Please run pre-market caching first.")
-        return pd.DataFrame()
+        return pd.DataFrame(), 0
         
     cache_df = pd.read_csv(CACHE_FILE)
     results = []
