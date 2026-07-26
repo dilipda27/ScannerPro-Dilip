@@ -7,8 +7,8 @@ import logging
 import datetime
 import os
 from kiteconnect import KiteTicker
-import config
-import telegram_agent
+from core import config
+from services import telegram_agent
 
 # --- GLOBAL STATE ---
 system_state = {
@@ -582,7 +582,7 @@ def execute_bot_recommendation(kite, index_name):
     spot = system_state["spot_price"]
     atm = system_state["current_atm"]
     
-    import paper_trader
+    from services import paper_trader
     
     # helper to fetch LTP and execute
     def place_trade(strike, opt_type, trade_label):

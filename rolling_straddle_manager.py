@@ -6,10 +6,10 @@ import time
 import threading
 import pandas as pd
 from options_bot import get_option_chain
-import paper_trader
-import config
-import telegram_agent
-from base_strategy import BaseStrategy
+from services import paper_trader
+from core import config
+from services import telegram_agent
+from strategies.base_strategy import BaseStrategy
 
 STATE_FILE = os.path.join("data", "state", "rolling_straddle_state.json")
 
@@ -37,7 +37,11 @@ default_state = {
     "last_update": ""
 }
 
-strategy = BaseStrategy("Straddle", STATE_FILE, default_state)
+class StraddleStrategy(BaseStrategy):
+    def run_scan(self, kite, tickers):
+        pass
+
+strategy = StraddleStrategy("Straddle", STATE_FILE, default_state)
 
 def load_state():
     return strategy.load_state()

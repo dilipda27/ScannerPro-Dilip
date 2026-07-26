@@ -18,6 +18,8 @@ This document serves as the complete technical reference and mathematical guide 
 11. [Multi-Year Breakout Swing](#11-multi-year-breakout-swing)
 12. [Volatility Contraction (3-Stage VCP)](#12-volatility-contraction-3-stage-vcp)
 13. [General Swing & 20-Day Breakout Scanners](#13-general-swing--20-day-breakout-scanners)
+14. [Top Gainers & Losers Scanner](#14-top-gainers--losers-scanner)
+15. [Unified Portfolio Risk & Stop Loss Management](#15-unified-portfolio-risk--stop-loss-management)
 
 ---
 
@@ -82,33 +84,42 @@ This document serves as the complete technical reference and mathematical guide 
 ---
 
 ## 3. Morning Range Strength & Weakness Scanner
-* **File Location**: [morning_range_scanner.py:scan_morning_range](file:///f:/MyFinance/ScannerPro-Dilip/morning_range_scanner.py#L169)
-* **Timeframe**: 5-minute candles (Intraday)
+* **File Location**: [morning_range_scanner.py:scan_morning_range](file:///f:/MyFinance/ScannerPro-Dilip/morning_range_scanner.py#L218)
+* **Timeframe**: 1-minute candles (Intraday resolution for watchlist building & execution)
 
 ### Core Logic
 * **Watchlist building (at 9:45 AM)**:
-  * Scans the morning range (9:15 AM - 9:45 AM) for Nifty 500 F&O stocks.
+  * Fetches the morning range (9:15 AM - 9:45 AM) in **1-minute resolution** for exact high/low level precision (requires >= 25 candles).
   * Excludes stocks with low volatility (range width `High - Low < 0.5%` of price).
   * Classifications:
-    * **STRONG**: 9:45 Close > 9:15 Open AND `(high_945 - close) / range_width <= 0.15` (Close is in the top 15% of the range).
-    * **WEAK**: 9:45 Close < 9:15 Open AND `(close - low_945) / range_width <= 0.15` (Close is in the bottom 15% of the range).
-* **Intraday Execution (Post-9:45 AM)**:
+    * **STRONG**: 9:45 Close > 9:15 Open AND `(high_945 - close) / range_width <= 0.15` (Close is in the top 15% of the range) AND 9:45 return `pct_change_945 >= 0.75%`.
+    * **WEAK**: 9:45 Close < 9:15 Open AND `(close - low_945) / range_width <= 0.15` (Close is in the bottom 15% of the range) AND 9:45 return `pct_change_945 <= -0.75%`.
+  * **Curation**: Watchlist is sorted and curated to select the top 15 WEAK candidates (ascending by return) and top 15 STRONG candidates (descending by return), keeping at most 30 stocks.
+* **Intraday Execution (9:45 AM - 11:30 AM cutoff)**:
   * **Long Trigger (STRONG)**:
-    * Nifty 50 Trend is Bullish today (LTP > Open).
-    * 5-minute close > `high_945` AND price > current VWAP.
-    * Volume Ratio: Trigger candle volume >= 1.5x of the average volume of the previous 5 candles.
+    * Nifty 50 Trend is Bullish (verified via Nifty 50 LTP > 20 EMA + return > 0.10% buffer zone vs Open).
+    * 1-minute Close >= `high_945 * 1.0025` (0.25% buffer level breakout) AND previous candle Close >= `high_945 * 1.0010` (2-candle breakout confirmation).
+    * Price > current VWAP.
+    * Volume Ratio: Breakout candle volume >= 1.5x of the average volume of the previous 5 1-minute candles.
   * **Short Trigger (WEAK)**:
-    * Nifty 50 Trend is Bearish today (LTP <= Open).
-    * 5-minute close < `low_945` AND price < current VWAP.
-    * Volume Ratio: Trigger candle volume >= 1.5x of the average volume of the previous 5 candles.
+    * Nifty 50 Trend is Bearish (verified via Nifty 50 LTP < 20 EMA + return < -0.10% buffer zone vs Open).
+    * 1-minute Close <= `low_945 * 0.9975` AND previous candle Close <= `low_945 * 0.9990` (2-candle breakdown confirmation).
+    * Price < current VWAP.
+    * Volume Ratio: Breakdown candle volume >= 1.5x of the average volume of the previous 5 1-minute candles.
+* **Optimization Guardrails**:
+  1. **Daily Trend Filter**: Price must be above Daily 50 EMA for STRONG and below Daily 50 EMA for WEAK setups.
+  2. **ATR Exhaustion Check**: Today's high-to-low range must not exceed 85% of the daily 14-period ATR.
+  3. **Candle Body & Wick Quality**: Breakout/breakdown candle body must be >= 70% of its range, and the upper wick (for LONG) or lower wick (for SHORT) must be <= 35% of the range (prevents trading long upper/lower shadow rejection candles).
+  4. **Overextension Filter**: entry close must be within 1.0% of current VWAP.
+  5. **RSI Extremes**: 14-period RSI must not be > 68 (for STRONG) or < 32 (for WEAK).
 
 ### Execution & Risk Parameters
-* **Entry**: Current price on breakout close.
+* **Entry**: Market entry on confirmation close.
 * **Stop Loss (SL)**:
   * Long: `max(current_vwap, mid_point)` where `mid_point = (high_945 + low_945) / 2`.
   * Short: `min(current_vwap, mid_point)`.
 * **Target**: Risk-Reward 1:2 (`entry + 2 * (entry - SL)` for Longs).
-* **Position Size**: Fixed capital of ₹250,000 per trade (`Quantity = capital / entry`).
+* **Position Size & Limits**: Fixed capital of ₹250,000 per trade. Strategy-wide limit of **maximum 7 active positions** running concurrently. No new entries allowed after the **11:30 AM entry cutoff**.
 
 ---
 
@@ -180,8 +191,12 @@ This document serves as the complete technical reference and mathematical guide 
 * **Timeframe**: 5-minute candles (Intraday)
 
 ### Core Logic
-* **Pre-Market Strength Filter**:
-  * Targets structurally strong stocks (Close > 50 EMA and RSI > 50) because they are the ones likely to attempt breakout levels, setting up potential Bull Traps if they fail.
+* **Pre-Market Strength/Weakness Filter**:
+  * Targets stocks in a macro downtrend/pullback to find valid resistance candidates: Close < 20 EMA and Daily RSI <= 48.0 (previously 52.0).
+* **Resistance Proximity / Wick Selection Setup**:
+  * Employs dual proximity criteria to shortlist candidates:
+    * **Condition A (Tight Close)**: Close is consolidative and tight to Yesterday's High (`pdh * 0.985 <= prev_close <= pdh * 1.01`).
+    * **Condition B (Upper Rejection Wick)**: Yesterday's candle had an upper rejection wick >= 25% of the total candle range and closed within 3.5% of Yesterday's High (`pdh * 0.965 <= prev_close <= pdh * 1.01`).
 * **Early Momentum Refresh (9:20 AM - 9:30 AM)**:
   * Price must show strength: Open positive (`LTP > Open`) and trade near Yesterday's High (`LTP >= Yesterday_High * 0.99`).
 * **Intraday Execution (9:30 AM - 2:45 PM)**:
@@ -383,5 +398,57 @@ This document serves as the complete technical reference and mathematical guide 
 * **Volume Breakout**: Volume > 1.5x of the 20-day Volume SMA.
 
 ---
+
+## 14. Top Gainers & Losers Scanner
+* **File Location**: [top_gainers_losers_scanner.py](file:///f:/MyFinance/ScannerPro-Dilip/top_gainers_losers_scanner.py)
+* **Timeframe**: 5-minute candles (Intraday)
+
+### Core Logic
+* **Watchlist Building (at 9:30 AM)**:
+  * Identifies the top 5 gainers (Long Watch) and top 5 losers (Short Watch) in the Nifty 500 F&O segment.
+  * Price range filter: ₹100 to ₹5,000.
+* **Intraday Execution (9:30 AM - 2:45 PM)**:
+  * Monitors watchlist for consolidation breakout/breakdowns.
+  * **Nifty 50 Trend Alignment**: Nifty 50 trend must be Bullish for Long setups, Bearish for Short setups.
+  * **Consolidation**: The high-to-low range of the previous 3 completed candles must be tight: spread <= 0.6% of the current price.
+  * **Volume Spike**: Volume of the breakout candle must be >= 2.0x of the consolidation average volume.
+  * **EMA Alignment**: 9 EMA > 21 EMA and Close > 9 EMA (for Long), 9 EMA < 21 EMA and Close < 9 EMA (for Short).
+  * **Breakout / Breakdown Levels & Proximity**:
+    * **LONG (GAINER)**: `consol_high < Close <= consol_high * 1.008` and `VWAP < Close <= VWAP * 1.012` (no-chase thresholds).
+    * **SHORT (LOSER)**: `consol_low * 0.992 <= Close < consol_low` and `VWAP * 0.988 <= Close < VWAP`.
+
+### Execution & Risk Parameters
+* **Entry**: Market price on breakout close.
+* **Stop Loss (SL)**:
+  * LONG: `max(consol_low, current_vwap)`.
+  * SHORT: `min(consol_high, current_vwap)`.
+* **Target**: Risk-Reward 1:2.
+* **Position Size**: Fixed capital of ₹250,000 per trade.
+
+---
+
+## 15. Unified Portfolio Risk & Stop Loss Management
+* **File Location**: [paper_trader.py](file:///f:/MyFinance/ScannerPro-Dilip/paper_trader.py)
+
+### Same-Day Re-Entry Block
+* Prevents entering a trade on a ticker if it has already been traded and closed today.
+* Scans both active portfolio records and today's archived history file to enforce the block.
+
+### Strategy-Aware Breakeven Trailing Threshold
+* **Breakout Strategies** (`ORB`, `15-Min Bullish Breakout`, `15-Min Bearish Breakdown`, `52-Week High Breakout`, `Volatility Contraction`, `Top Gainers/Losers Breakout`):
+  * **Stage 1 (Breakeven)**: Stop Loss is trailed to **Entry Price** (Break-even) when the price reaches **+1.25R** (wider threshold to avoid premature retest chop-outs).
+* **Rejection / Mean-Reversion Strategies** (VWAP Rejections, etc.):
+  * **Stage 1 (Breakeven)**: Stop Loss is trailed to **Entry Price** when the price reaches **+1.0R**.
+
+### Post-2:30 PM (14:30) Profit-Locking Rule
+* After 2:30 PM daily, if the trade is in profit by **> 0.5R** of the initial risk, the system locks **50% of the unrealized gains**.
+  * LONG: `SL = entry + 0.5 * (ltp - entry)`.
+  * SHORT: `SL = entry - 0.5 * (entry - ltp)`.
+
+### Standard Trailing Stop-Loss Stages (Global)
+* **Stage 2**: Price reaches **+1.5R** -> Trail SL to **+0.5R** profit.
+* **Stage 3**: Price reaches **+2.0R** -> Trail SL to **+1.0R** profit.
+
+---
 *Created for: Dilip*  
-*Last Updated: 2026-07-14*
+*Last Updated: 2026-07-24*

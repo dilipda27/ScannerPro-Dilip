@@ -1099,21 +1099,34 @@ def run_backtest(df, strategy, capital=250000, risk_pct=1.0, slippage_pct=0.05, 
                     initial_sl = active_trade['InitialSL']
                     entry_price = active_trade['EntryPrice']
                     current_sl = active_trade['SL']
+                    strategy_name = str(active_trade.get('Strategy', '')).lower()
+                    is_breakout_strategy = any(k in strategy_name for k in [
+                        'orb', 'bullish breakout', 'bearish breakdown', '52-week', '52w', 'volatility contraction', 'gainer/loser'
+                    ])
+                    be_r_threshold = 1.25 if is_breakout_strategy else 1.0
+                    is_post_1430 = timestamp.time() >= datetime.time(14, 30)
                     
                     if active_trade['Type'] == 'BUY':
                         initial_risk = entry_price - initial_sl
                         
+                        # Apply post-14:30 profit lock rule
+                        if is_post_1430 and row['high'] >= entry_price + (0.5 * initial_risk):
+                            profit_lock_sl = entry_price + (0.5 * (row['close'] - entry_price))
+                            if profit_lock_sl > active_trade['SL']:
+                                active_trade['SL'] = profit_lock_sl
+                                current_sl = profit_lock_sl
+                        
                         # Apply multi-stage trailing stop-loss
                         if row['high'] >= entry_price + (2.0 * initial_risk):
                             new_sl = entry_price + (1.0 * initial_risk)
-                            if new_sl > current_sl:
+                            if new_sl > active_trade['SL']:
                                 active_trade['SL'] = new_sl
                         elif row['high'] >= entry_price + (1.5 * initial_risk):
                             new_sl = entry_price + (0.5 * initial_risk)
-                            if new_sl > current_sl:
+                            if new_sl > active_trade['SL']:
                                 active_trade['SL'] = new_sl
-                        elif row['high'] >= entry_price + (1.0 * initial_risk):
-                            if entry_price > current_sl:
+                        elif row['high'] >= entry_price + (be_r_threshold * initial_risk):
+                            if entry_price > active_trade['SL']:
                                 active_trade['SL'] = entry_price
                                 
                         # Check exit triggers
@@ -1142,17 +1155,24 @@ def run_backtest(df, strategy, capital=250000, risk_pct=1.0, slippage_pct=0.05, 
                     else: # Bearish / SELL trade
                         initial_risk = initial_sl - entry_price
                         
+                        # Apply post-14:30 profit lock rule
+                        if is_post_1430 and row['low'] <= entry_price - (0.5 * initial_risk):
+                            profit_lock_sl = entry_price - (0.5 * (entry_price - row['close']))
+                            if profit_lock_sl < active_trade['SL']:
+                                active_trade['SL'] = profit_lock_sl
+                                current_sl = profit_lock_sl
+
                         # Apply multi-stage trailing stop-loss
                         if row['low'] <= entry_price - (2.0 * initial_risk):
                             new_sl = entry_price - (1.0 * initial_risk)
-                            if new_sl < current_sl:
+                            if new_sl < active_trade['SL']:
                                 active_trade['SL'] = new_sl
                         elif row['low'] <= entry_price - (1.5 * initial_risk):
                             new_sl = entry_price - (0.5 * initial_risk)
-                            if new_sl < current_sl:
+                            if new_sl < active_trade['SL']:
                                 active_trade['SL'] = new_sl
-                        elif row['low'] <= entry_price - (1.0 * initial_risk):
-                            if entry_price < current_sl:
+                        elif row['low'] <= entry_price - (be_r_threshold * initial_risk):
+                            if entry_price < active_trade['SL']:
                                 active_trade['SL'] = entry_price
                                 
                         # Check exit triggers

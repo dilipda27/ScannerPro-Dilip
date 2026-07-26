@@ -1,0 +1,13 @@
+=== STRATEGY BACKTEST RESULTS REPORT ===
+Strategy      : Bullish Breakout (Intraday)
+Ticker        : ALL_STOCKS
+Timestamp     : 2026-06-28 15:13:55
+Date Range    : 2024-01-01 to 2026-05-22
+----------------------------------------
+Net Profit    : ₹22,032.06
+Win Rate      : 47.62% (20 Wins / 22 Losses)
+Profit Factor : 1.52
+Max Drawdown  : ₹11,711.79 (4.68%)
+Sharpe Ratio  : 2.84
+Total Trades  : 42
+========================================

@@ -5,10 +5,10 @@ import math
 import pandas as pd
 import datetime
 import threading
-import config
-import paper_trader
+from core import config
+from services import paper_trader
 from options_bot import get_option_chain
-from base_strategy import BaseStrategy
+from strategies.base_strategy import BaseStrategy
 
 STATE_FILE = os.path.join("data", "state", "option_desk_state.json")
 _cached_vix = 15.0
@@ -36,7 +36,11 @@ default_state = {
     "pe_entry_price": 0.0
 }
 
-strategy = BaseStrategy("OptionDesk", STATE_FILE, default_state)
+class OptionDeskStrategy(BaseStrategy):
+    def run_scan(self, kite, tickers):
+        pass
+
+strategy = OptionDeskStrategy("OptionDesk", STATE_FILE, default_state)
 
 def load_state():
     return strategy.load_state()

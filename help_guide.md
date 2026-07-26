@@ -63,11 +63,17 @@ The app features an integrated AI Advisor powered by Google Gemini.
 ## 🛡️ Paper Trading & Risk Management Engine
 The app includes a fully automated paper trading engine to track performance without risking real capital.
 
-### Structural Trailing Stop-Loss (The "75% Rule")
-To avoid getting "chopped out" prematurely during normal pullbacks, the app uses a patient trailing SL:
-- **Initial Target:** Set at 2R (Risk:Reward of 1:2).
-- **Trailing Trigger:** The Stop Loss is ONLY moved to break-even once the stock achieves **75% of the target move** (i.e., 1.5R).
-- **Why?** This prevents you from being stopped out at break-even during standard retests of the breakout/breakdown levels.
+### Multi-Stage Strategy-Aware Trailing Stop-Loss
+To avoid getting "chopped out" prematurely during normal pullbacks while protecting late-day gains, the app uses a strategy-aware trailing SL engine:
+- **Initial Target:** Typically set at 2R (Risk:Reward of 1:2).
+- **Strategy-Aware Breakeven Triggers**:
+  - **Breakout Strategies** (`15-Min ORB`, `15-Min Bullish Breakout`, `15-Min Bearish Breakdown`, `52-Week High Breakout`, `Volatility Contraction`): Move SL to Breakeven (Entry) at **+1.25 R** gain. This prevents being stopped out at breakeven during standard retests of breakout levels.
+  - **Rejection & Pullback Strategies** (`Bullish VWAP Rejection`, `Bearish VWAP Rejection`, `Failed Breakout Short`, `Morning Range`): Move SL to Breakeven (Entry) at **+1.0 R** gain.
+- **Profit Lock Stages**:
+  - **Stage 2 (+1.5 R gain)**: Move SL to **+0.5 R** profit.
+  - **Stage 3 (+2.0 R gain)**: Move SL to **+1.0 R** profit.
+- **Post-2:30 PM (14:30) Profit-Lock Rule**:
+  - After 2:30 PM, for any active trade with unrealized gain $> +0.5 R$, the engine automatically locks in **50% of peak unrealized profit** to prevent late-day intraday profit give-backs ahead of 3:15 PM EOD square-off.
 
 ### Notifications & Telegram
 - All live scan triggers and automated paper trade executions are logged in the app.
