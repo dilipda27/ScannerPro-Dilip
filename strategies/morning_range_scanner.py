@@ -63,15 +63,7 @@ def save_notified(notified_set):
     except Exception as e:
         logging.error(f"Error saving morning range notified list: {e}")
 
-def calculate_vwap(df):
-    df_copy = df.copy()
-    # Normalize index date if timezone aware
-    df_copy['date_group'] = df_copy.index.date
-    tp = (df_copy['high'] + df_copy['low'] + df_copy['close']) / 3
-    tpv = tp * df_copy['volume']
-    cum_tpv = tpv.groupby(df_copy['date_group']).cumsum()
-    cum_vol = df_copy['volume'].groupby(df_copy['date_group']).cumsum()
-    return cum_tpv / cum_vol
+from utils.indicators import calculate_vwap_cumulative as calculate_vwap  # cumulative: returns Series
 
 def build_morning_watchlist(kite):
     """Fetches morning range (09:15 - 09:45 AM) and EOD indicators for all F&O stocks and builds the watchlist."""
@@ -184,46 +176,7 @@ def build_morning_watchlist(kite):
         logging.error(f"Error building morning range watchlist: {e}")
         return {}
 
-def check_nifty_trend(kite):
-    """Returns 'BULLISH', 'BEARISH', or 'NEUTRAL' based on Nifty 50 5m VWAP & 20 EMA alignment."""
-    try:
-        nifty_token_map = kite_scanner.get_kite_instruments(kite, ["NIFTY 50"])
-        if nifty_token_map and "NIFTY 50" in nifty_token_map:
-            nifty_token = nifty_token_map["NIFTY 50"]
-            today = datetime.datetime.now()
-            # Fetch last 3 days of 5-minute data to ensure EMA-20 is populated cleanly
-            nifty_from = today - datetime.timedelta(days=3)
-            nifty_df = kite_scanner.fetch_kite_data(kite, nifty_token, nifty_from, today, "5minute")
-            
-            if not nifty_df.empty and len(nifty_df) >= 20:
-                nifty_df.columns = [c.lower() for c in nifty_df.columns]
-                
-                import pandas_ta as ta
-                nifty_df.ta.ema(length=20, append=True)
-                
-                latest = nifty_df.iloc[-1]
-                nifty_ltp = latest['close']
-                nifty_ema = latest['EMA_20']
-                
-                # Check relation to open of today
-                today_rows = nifty_df[nifty_df.index.date == today.date()]
-                nifty_open = today_rows.iloc[0]['open'] if not today_rows.empty else nifty_ltp
-                
-                # Introduce a 0.10% buffer zone around open (approx. 24 points)
-                nifty_change_pct = (nifty_ltp - nifty_open) / nifty_open
-                buffer = 0.0010
-                
-                is_bullish = nifty_ltp > nifty_ema and nifty_change_pct > buffer
-                is_bearish = nifty_ltp < nifty_ema and nifty_change_pct < -buffer
-                
-                logging.info(f"Broad Market Check -> Nifty LTP: {nifty_ltp:.2f} | Open: {nifty_open:.2f} | 20 EMA: {nifty_ema:.2f} | Change %: {nifty_change_pct*100:.3f}% | Trend: {'BULLISH' if is_bullish else 'BEARISH' if is_bearish else 'NEUTRAL'}")
-                if is_bullish:
-                    return "BULLISH"
-                elif is_bearish:
-                    return "BEARISH"
-    except Exception as e:
-        logging.warning(f"Failed to check Nifty 50 trend: {e}")
-    return "NEUTRAL"
+from core.market_context import check_nifty_trend, is_nifty_bullish, is_nifty_bearish
 
 def scan_morning_range(kite):
     """Main function called continuously by the scheduler."""
@@ -336,12 +289,16 @@ def scan_morning_range(kite):
                 if info["classification"] == "STRONG":
                     body_ratio = (candle_close_1m - c_low) / c_range
                     upper_wick = c_high - max(latest_candle['open'], candle_close_1m)
-                    if body_ratio < 0.50 or (upper_wick / c_range) > 0.45:
+                    if body_ratio < 0.50:
+                        reasons.append(f"Bad candle body quality (body ratio: {body_ratio:.2f} < 0.50)")
+                    elif (upper_wick / c_range) > 0.45:
                         reasons.append(f"Rejection wick too long (wick ratio: {upper_wick/c_range:.2f} > 0.45)")
                 elif info["classification"] == "WEAK":
                     body_ratio = (c_high - candle_close_1m) / c_range
                     lower_wick = min(latest_candle['open'], candle_close_1m) - c_low
-                    if body_ratio < 0.50 or (lower_wick / c_range) > 0.45:
+                    if body_ratio < 0.50:
+                        reasons.append(f"Bad candle body quality (body ratio: {body_ratio:.2f} < 0.50)")
+                    elif (lower_wick / c_range) > 0.45:
                         reasons.append(f"Rejection wick too long (wick ratio: {lower_wick/c_range:.2f} > 0.45)")
 
             # 4. Tighter Overextension Check (Closeness to VWAP within 1.0%)
@@ -357,10 +314,10 @@ def scan_morning_range(kite):
             # 6. Multi-Candle Confirmation (Check previous 1-min candle close)
             prev_candle_close = post_945_df.iloc[-2]['close'] if len(post_945_df) >= 2 else candle_close_1m
 
-            # LONG TRIGGER (STRONG) - 0.25% Level Buffer + 2-Candle Confirmation
+            # LONG TRIGGER (STRONG) - 0.15% Level Buffer + 2-Candle Confirmation
             if info["classification"] == "STRONG":
-                breakout_level = high_945 * 1.0025
-                is_breakout_confirmed = (candle_close_1m >= breakout_level) and (prev_candle_close >= high_945 * 1.0010)
+                breakout_level = high_945 * 1.0015
+                is_breakout_confirmed = (candle_close_1m >= breakout_level) and (prev_candle_close >= high_945 * 1.0005)
                 
                 # Check if breakout was attempted (crossed high_945)
                 breakout_attempted = current_price >= high_945
@@ -397,10 +354,10 @@ def scan_morning_range(kite):
                 else:
                     return {"status": "NO_BREAKOUT", "ticker": ticker, "reasons": ["Inside 9:45 range"]}
             
-            # SHORT TRIGGER (WEAK) - 0.25% Level Buffer + 2-Candle Confirmation
+            # SHORT TRIGGER (WEAK) - 0.15% Level Buffer + 2-Candle Confirmation
             elif info["classification"] == "WEAK":
-                breakdown_level = low_945 * 0.9975
-                is_breakdown_confirmed = (candle_close_1m <= breakdown_level) and (prev_candle_close <= low_945 * 0.9990)
+                breakdown_level = low_945 * 0.9985
+                is_breakdown_confirmed = (candle_close_1m <= breakdown_level) and (prev_candle_close <= low_945 * 0.9995)
                 
                 # Check if breakdown was attempted (crossed low_945)
                 breakdown_attempted = current_price <= low_945

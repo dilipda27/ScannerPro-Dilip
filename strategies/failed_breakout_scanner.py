@@ -5,8 +5,10 @@ import time
 import logging
 import os
 import threading
+import concurrent.futures
 from strategies import kite_scanner
 from api import market_data as scanner
+from core.market_context import is_nifty_bullish
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -70,7 +72,15 @@ def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
         if not token_map:
             logging.error("Failed to retrieve instrument tokens.")
             return False
-            
+
+        # Batch price pre-screen
+        all_tickers = [f"NSE:{s}" for s in token_map.keys()]
+        try:
+            ohlc_dict = kite_scanner.fetch_ohlc_safe(kite, all_tickers)
+            token_map = {s: t for s, t in token_map.items() if (s in [k.replace("NSE:", "") for k, v in ohlc_dict.items() if 100 <= v.get('last_price', 0) <= 5000])}
+        except Exception as e:
+            logging.warning(f"Batch price pre-screen failed: {e}")
+
         cache_data = []
         to_date = datetime.datetime.now()
         from_date_daily = to_date - datetime.timedelta(days=100)
@@ -86,7 +96,7 @@ def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
                 if df_daily.empty or len(df_daily) < 50:
                     return
                     
-                # Calculate indicators
+                df_daily['Vol_SMA_20'] = df_daily['volume'].rolling(window=20).mean()
                 df_daily.ta.ema(length=20, append=True)
                 df_daily.ta.ema(length=50, append=True)
                 df_daily.ta.rsi(length=14, append=True)
@@ -117,7 +127,8 @@ def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
                 near_resistance = near_resistance_tight or near_resistance_wick
                 
                 if is_macro_bearish and near_resistance:
-                    avg_vol_15m = kite_scanner.fetch_avg_15m_volume(kite, token, to_date)
+                    avg_vol_20 = float(latest['Vol_SMA_20']) if ('Vol_SMA_20' in latest and not pd.isna(latest['Vol_SMA_20'])) else float(df_daily['volume'].tail(20).mean())
+                    avg_vol_15m = kite_scanner.fetch_avg_15m_volume(kite, token, to_date, daily_avg_vol=avg_vol_20)
                     with _lock:
                         cache_data.append({
                             "Ticker": symbol,
@@ -137,20 +148,10 @@ def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
                     if progress_callback:
                         progress_callback(processed, total, symbol)
                         
-        import concurrent.futures
-        try:
-            from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
-            ctx = get_script_run_ctx()
-        except ImportError:
-            ctx = None
-
-        def process_symbol_with_ctx(sym, tok):
-            if ctx:
-                add_script_run_ctx(ctx=ctx)
-            return process_symbol(sym, tok)
-
+        from core.thread_utils import wrap_thread_ctx
+        wrapped_process = wrap_thread_ctx(process_symbol)
         with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-            futures = {executor.submit(process_symbol_with_ctx, sym, tok): sym for sym, tok in token_map.items()}
+            futures = {executor.submit(wrapped_process, sym, tok): sym for sym, tok in token_map.items()}
             concurrent.futures.wait(futures.keys())
             
         if cache_data:
@@ -160,13 +161,7 @@ def cache_failed_candidates(kite, progress_callback=None, refresh_only=False):
             
         return False
 
-def calculate_vwap(df):
-    """Calculate VWAP for intraday data."""
-    if df.empty:
-        return 0
-    tp = (df['high'] + df['low'] + df['close']) / 3
-    vwap = (tp * df['volume']).sum() / df['volume'].sum()
-    return vwap
+from utils.indicators import calculate_vwap_scalar as calculate_vwap  # scalar: returns float
 
 def scan_failed_breakouts(kite, progress_callback=None):
     """
@@ -192,23 +187,7 @@ def scan_failed_breakouts(kite, progress_callback=None):
     processed = 0
     
     # --- BROAD MARKET TREND CHECK (NIFTY 50) ---
-    nifty_bullish = False
-    try:
-        nifty_token_map = kite_scanner.get_kite_instruments(kite, ["NIFTY 50"])
-        if nifty_token_map and "NIFTY 50" in nifty_token_map:
-            nifty_token = nifty_token_map["NIFTY 50"]
-            nifty_from = to_date.replace(hour=9, minute=15, second=0, microsecond=0)
-            if nifty_from > to_date:
-                nifty_from = nifty_from - datetime.timedelta(days=1)
-            nifty_df = kite_scanner.fetch_kite_data(kite, nifty_token, nifty_from, to_date, "5minute")
-            if not nifty_df.empty:
-                nifty_open = nifty_df.iloc[0]['open']
-                nifty_ltp = nifty_df.iloc[-1]['close']
-                nifty_change_pct = (nifty_ltp - nifty_open) / nifty_open
-                nifty_bullish = nifty_change_pct > 0.0005 # Nifty up > 0.05%
-                logging.info(f"Broad Market Check -> Nifty Open: {nifty_open:.2f}, LTP: {nifty_ltp:.2f} | Change %: {nifty_change_pct*100:.3f}% | Bullish? {nifty_bullish}")
-    except Exception as ne:
-        logging.warning(f"Failed to fetch Nifty 50 trend: {ne}")
+    nifty_bullish = is_nifty_bullish(kite)
         
     # STRICT RULE: Reject short trades if broad market is bullish
     if nifty_bullish:
@@ -327,29 +306,28 @@ def scan_failed_breakouts(kite, progress_callback=None):
                 logging.warning(f"Error calculating consecutive candles above R: {ex}")
                 consecutive_above = 0
                 
-            # 4. Volume Spike Confirmation: Volume on trigger rejection candle is high (>= 1.5x)
-            vol_spike = confirmed_volume >= 1.5 * confirmed_vol_avg if confirmed_vol_avg > 0 else True
+            # 4. Volume Spike Confirmation: Volume on trigger rejection candle is high (>= 1.0x)
+            vol_spike = confirmed_volume >= 1.0 * confirmed_vol_avg if confirmed_vol_avg > 0 else True
             
-            # 5. Intraday Trend Alignment: Below VWAP
+            # 5. Intraday Trend Alignment: Calculate VWAP for metadata/logging
             vwap = calculate_vwap(df_today)
-            below_vwap = ltp < vwap
             
             # 6. RSI Buffer: 5-min RSI > 38 (not oversold)
             latest_rsi = latest_candle['RSI_14'] if 'RSI_14' in latest_candle else 50
             not_oversold = latest_rsi > 38
             
-            # 7. No-Chase Rule: Slippage is <= 0.4% from resistance level R
+            # 7. No-Chase Rule: Slippage is <= 0.8% from resistance level R
             slippage_pct = (R - ltp) / R * 100
-            is_chasing = slippage_pct > 0.4
+            is_chasing = slippage_pct > 0.8
             
-            # Combine all upgraded filters (including max 2-candle trap duration)
-            if is_trap_triggered and is_bearish_rejection and (consecutive_above <= 2) and vol_spike and below_vwap and not_oversold and not is_chasing:
+            # Combine all upgraded filters (including max 5-candle trap duration)
+            if is_trap_triggered and is_bearish_rejection and (consecutive_above <= 5) and vol_spike and not_oversold and not is_chasing:
                 if datetime.time(9, 30) <= to_date.time() <= datetime.time(14, 0):
                     entry_price = ltp
                     qty = int(250000 / entry_price)
                     
                     sl_calculated = failed_swing_high * 1.001
-                    stop_loss = max(sl_calculated, entry_price * 1.0075) # Minimum 0.75% SL buffer
+                    stop_loss = max(sl_calculated, entry_price * 1.0125) # Minimum 1.25% SL buffer
                     stop_loss = min(stop_loss, entry_price * 1.02)
                     
                     risk = stop_loss - entry_price

@@ -1,21 +1,10 @@
 import os
 import json
 from kiteconnect import KiteConnect
-from requests.adapters import HTTPAdapter
+import core.kite_patch  # noqa: F401 — applies KiteConnect connection pool patch
 from core.config import KITE_API_KEY
 from core.exceptions import KiteAuthError
 from core.logger import logger
-
-# Patch KiteConnect to increase requests connection pool size for multi-threading stability
-_original_kite_init = KiteConnect.__init__
-def _patched_kite_init(self, *args, **kwargs):
-    _original_kite_init(self, *args, **kwargs)
-    self.timeout = 15 # Set a sensible default timeout
-    if hasattr(self, "reqsession"):
-        adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100)
-        self.reqsession.mount("https://", adapter)
-        self.reqsession.mount("http://", adapter)
-KiteConnect.__init__ = _patched_kite_init
 
 def get_kite_client(session_file: str = ".kite_session.json") -> KiteConnect:
     """

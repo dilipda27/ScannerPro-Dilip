@@ -1,6 +1,12 @@
 # Configuration File
 # Expose variables dynamically loaded from config/config.yaml for backwards compatibility.
 import os
+import logging
+
+# Suppress Streamlit's noisy 'missing ScriptRunContext' warnings globally from all threadpools
+logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
+logging.getLogger("streamlit.runtime.scriptrunner").setLevel(logging.ERROR)
+
 
 # Fallback defaults (checked against environment variables first)
 KITE_API_KEY = os.environ.get("KITE_API_KEY", "cl7wqm54xlvsva52")

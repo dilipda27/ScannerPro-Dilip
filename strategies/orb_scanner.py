@@ -7,11 +7,11 @@ import pandas_ta as ta
 
 from strategies.kite_scanner import (
     fetch_kite_data, 
-    calculate_vwap, 
     get_trending_orb_list, 
     get_nifty500_fno_symbols, 
     get_kite_instruments
 )
+from utils.indicators import calculate_vwap_scalar as calculate_vwap  # scalar: returns float
 
 def scan_orb_setups(kite, progress_callback=None):
     """
@@ -110,7 +110,7 @@ def scan_orb_setups(kite, progress_callback=None):
         if symbol in cache_indicators:
             daily_ema_20 = cache_indicators[symbol].get('EMA_20', 0)
             daily_ema_200 = cache_indicators[symbol]['EMA_200']
-            daily_rsi = cache_indicators[symbol]['RSI_14']
+            daily_rsi = cache_indicators[symbol].get('RSI_14', cache_indicators[symbol].get('RSI', 50.0))
             prev_day_high = cache_indicators[symbol]['Prev_Day_High']
             prev_day_low = cache_indicators[symbol]['Prev_Day_Low']
             prev_close = cache_indicators[symbol].get('Prev_Day_Close', cache_indicators[symbol].get('Prev_Close', 0))

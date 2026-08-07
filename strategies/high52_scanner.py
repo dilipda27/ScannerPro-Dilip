@@ -4,6 +4,8 @@ import datetime
 import time
 import logging
 import os
+import threading
+import concurrent.futures
 from kiteconnect import KiteConnect
 from strategies import kite_scanner
 
@@ -53,29 +55,25 @@ def cache_daily_data(kite, progress_callback=None):
     
     total_symbols = len(token_map)
     processed = 0
-    
-    for symbol, token in token_map.items():
-        processed += 1
-        if progress_callback:
-            progress_callback(processed, total_symbols, symbol)
-            
+    _lock = threading.Lock()
+    import concurrent.futures
+    import threading
+
+    def process_high52_symbol(item):
+        nonlocal processed
+        symbol, token = item
         try:
             df = kite_scanner.fetch_kite_data(kite, token, from_date, to_date, "day")
             if df.empty or len(df) < 250:
-                continue
+                return
                 
-            # 1. 52-Week High/Low (last 250 sessions)
             df_52w = df.iloc[-250:]
             high_52w = df_52w['high'].max()
             low_52w = df_52w['low'].min()
             
-            # 2. 14-day ATR
-            # We use all available data for better ATR smoothing then take latest
             df.ta.atr(length=14, append=True)
             latest_atr = df.iloc[-1]['ATRr_14']
             
-            # 3. Robust Trend Filter (EMA Alignment)
-            # Logic: Price > 20 EMA > 50 EMA > 200 EMA (Long-term strength)
             df.ta.ema(length=20, append=True)
             df.ta.ema(length=50, append=True)
             df.ta.ema(length=200, append=True)
@@ -83,13 +81,9 @@ def cache_daily_data(kite, progress_callback=None):
             latest_row = df.iloc[-1]
             is_trending = (latest_row['close'] > latest_row['EMA_20'] > latest_row['EMA_50'] > latest_row['EMA_200'])
             
-            # 4. Proximity Filter (Within 3% of 52W High)
-            # This ensures we only scan stocks likely to break out TODAY
             dist_from_high = (high_52w - latest_row['close']) / latest_row['close'] * 100
             is_close_to_high = dist_from_high <= 3.0
             
-            # 5. Consolidation Filter (within 5% range for the last 10 sessions prior to today)
-            # Take last 10 completed daily closed prices (excluding today)
             close_10d = df['close'].iloc[-11:-1] if len(df) >= 11 else df['close']
             if not close_10d.empty:
                 max_c = close_10d.max()
@@ -100,18 +94,27 @@ def cache_daily_data(kite, progress_callback=None):
                 is_consolidating_daily = True
 
             if is_trending and is_close_to_high and is_consolidating_daily:
-                cache_data.append({
-                    "Ticker": symbol,
-                    "Token": token,
-                    "52W High": high_52w,
-                    "52W Low": low_52w,
-                    "ATR_14": latest_atr,
-                    "Price_at_Cache": latest_row['close'],
-                    "Dist_from_High_%": round(dist_from_high, 2)
-                })
+                with _lock:
+                    cache_data.append({
+                        "Ticker": symbol,
+                        "Token": token,
+                        "52W High": high_52w,
+                        "52W Low": low_52w,
+                        "ATR_14": latest_atr,
+                        "Price_at_Cache": latest_row['close'],
+                        "Dist_from_High_%": round(dist_from_high, 2)
+                    })
         except Exception as e:
             logging.error(f"Error caching {symbol}: {e}")
-            continue
+        finally:
+            with _lock:
+                processed += 1
+                if progress_callback:
+                    progress_callback(processed, total_symbols, symbol)
+
+    from core.thread_utils import wrap_thread_ctx
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        executor.map(wrap_thread_ctx(process_high52_symbol), token_map.items())
             
     if cache_data:
         cache_df = pd.DataFrame(cache_data)
@@ -122,14 +125,7 @@ def cache_daily_data(kite, progress_callback=None):
     logging.warning("Caching complete, but no stocks matched the uptrend criteria.")
     return False
 
-def calculate_vwap(df):
-    """Calculate Daily VWAP from intraday data."""
-    if df.empty:
-        return df
-    # Typical Price * Volume
-    v_tp = ((df['high'] + df['low'] + df['close']) / 3) * df['volume']
-    df['VWAP'] = v_tp.cumsum() / df['volume'].cumsum()
-    return df
+from utils.indicators import calculate_vwap_cumulative  # cumulative: returns Series
 
 def scan_52w_breakouts(kite, progress_callback=None, only_closed_candles=True):
     """
@@ -225,7 +221,7 @@ def scan_52w_breakouts(kite, progress_callback=None, only_closed_candles=True):
                 continue
                 
             # Calculate Indicators
-            df_5m = calculate_vwap(df_5m)
+            df_5m['VWAP'] = calculate_vwap_cumulative(df_5m)
             df_5m['Vol_SMA_20'] = df_5m['volume'].rolling(window=20).mean()
             
             # --- 5-MINUTE CLOSE LOGIC ---

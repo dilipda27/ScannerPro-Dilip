@@ -8,18 +8,7 @@ import os
 import logging
 import datetime
 from kiteconnect import KiteConnect
-from requests.adapters import HTTPAdapter
-
-# Global patch to increase requests connection pool size for multi-threading stability
-_original_kite_init = KiteConnect.__init__
-def _patched_kite_init(self, *args, **kwargs):
-    _original_kite_init(self, *args, **kwargs)
-    self.timeout = 15
-    if hasattr(self, "reqsession"):
-        adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100)
-        self.reqsession.mount("https://", adapter)
-        self.reqsession.mount("http://", adapter)
-KiteConnect.__init__ = _patched_kite_init
+import core.kite_patch  # noqa: F401 — applies KiteConnect connection pool patch
 from core import config
 from strategies import kite_scanner
 from strategies import high52_scanner
@@ -143,13 +132,23 @@ def run_automated_orb(scan_label="ORB Scan"):
         # 5. Execute Paper Trades
         from services import paper_trader
         for _, row in results_df.iterrows():
+            breakout_price = float(row['Breakout Price'])
+            sl_price = float(row['Paper SL'])
+            risk = abs(breakout_price - sl_price)
+            if "Bullish" in str(row['Breakout']):
+                target_price = breakout_price + (2.0 * risk)
+            else:
+                target_price = breakout_price - (2.0 * risk)
+
             paper_trader.execute_paper_trade(
                 ticker=row['Ticker'],
                 trade_type=row['Breakout'],
-                entry_price=row['Breakout Price'],
-                sl=row['Paper SL'],
-                qty=row['Paper Qty'],
-                strategy="15-Min ORB"
+                entry_price=breakout_price,
+                sl=sl_price,
+                qty=int(row['Paper Qty']),
+                token=int(row['Token']),
+                strategy="15-Min ORB",
+                target=target_price
             )
             
         # 6. Dispatch to Telegram (Intraday Channel)
@@ -318,7 +317,8 @@ def run_automated_bearish_vwap_rejection():
                     sl=row['SL'],
                     qty=qty,
                     token=int(row['Token']),
-                    strategy="Bearish VWAP Rejection"
+                    strategy="Bearish VWAP Rejection",
+                    target=row['Target_1']
                 )
             except Exception as trade_err:
                 logging.error(f"Failed to execute auto-trade for {row['Ticker']}: {trade_err}")
@@ -411,7 +411,8 @@ def run_automated_bullish_vwap_rejection():
                     sl=row['SL'],
                     qty=qty,
                     token=int(row['Token']),
-                    strategy="Bullish VWAP Rejection"
+                    strategy="Bullish VWAP Rejection",
+                    target=row['Target_1']
                 )
             except Exception as trade_err:
                 logging.error(f"Failed to execute auto-trade for {row['Ticker']}: {trade_err}")
@@ -495,7 +496,8 @@ def run_automated_failed_breakouts():
                 sl=float(row['Stop Loss']),
                 qty=int(row['Qty']),
                 token=row.get('Token'),
-                strategy="Failed Breakout Short"
+                strategy="Failed Breakout Short",
+                target=float(row['Target'])
             )
             
         notification_helper.mark_as_notified("FAILED_BREAKOUT", new_fail['Ticker'].tolist())
@@ -577,7 +579,8 @@ def run_automated_bullish_breakouts():
                 sl=float(row['Stop Loss']),
                 qty=int(row['Qty']),
                 token=row.get('Token'),
-                strategy="Bullish Breakout"
+                strategy="Bullish Breakout",
+                target=float(row['Target'])
             )
             
         notification_helper.mark_as_notified("BULLISH", new_bull['Ticker'].tolist())
@@ -659,7 +662,8 @@ def run_automated_bearish_breakdowns():
                 sl=float(row['Stop Loss']),
                 qty=int(row['Qty']),
                 token=row.get('Token'),
-                strategy="Bearish Breakdown"
+                strategy="Bearish Breakdown",
+                target=float(row['Target'])
             )
             
         notification_helper.mark_as_notified("BEARISH", new_bear['Ticker'].tolist())

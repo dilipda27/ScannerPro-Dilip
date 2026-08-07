@@ -15,17 +15,7 @@ import os
 import pandas as pd
 import ai_advisor
 from kiteconnect import KiteConnect
-from requests.adapters import HTTPAdapter
-
-# Global patch to increase requests connection pool size for multi-threading stability
-_original_kite_init = KiteConnect.__init__
-def _patched_kite_init(self, *args, **kwargs):
-    _original_kite_init(self, *args, **kwargs)
-    if hasattr(self, "reqsession"):
-        adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100)
-        self.reqsession.mount("https://", adapter)
-        self.reqsession.mount("http://", adapter)
-KiteConnect.__init__ = _patched_kite_init
+import core.kite_patch  # noqa: F401 — applies KiteConnect connection pool patch
 from core import config
 import json
 from services import paper_trader
@@ -242,6 +232,15 @@ with header_col2:
                             "user_id": data.get("user_id", "ID"),
                             "user_name": data.get("user_name", "User")
                         }, f)
+                    
+                    # Reset the auth failure alert throttle so a future failure triggers a new alert
+                    alert_sent_file = os.path.join("data", "state", ".kite_auth_alert_sent")
+                    if os.path.exists(alert_sent_file):
+                        try:
+                            os.remove(alert_sent_file)
+                        except Exception as reset_err:
+                            logging.warning(f"Failed to reset auth alert throttle file: {reset_err}")
+                            
                     st.query_params.clear()
                     st.rerun()
                 except Exception as e:
@@ -2440,6 +2439,24 @@ if any(s in KITE_STRATEGIES for s in selected_strategies):
         refresh_bearish = refresh_all_cache or st.sidebar.checkbox("Refresh Bearish Only", value=False, disabled=refresh_all_cache)
         refresh_failed = refresh_all_cache or st.sidebar.checkbox("Refresh Failed Breakout Only", value=False, disabled=refresh_all_cache)
         
+        if st.sidebar.button("⚡ Run Unified Cache", width="stretch", type="primary", help="Runs the ultra-optimized unified caching for all scanners in ~1 min."):
+            kite = KiteConnect(api_key=api_key)
+            kite.set_access_token(st.session_state.kite_access_token)
+            
+            st.info("🔄 Running Unified Cache...")
+            p_bar = st.progress(0)
+            
+            def cb(processed, total, symbol):
+                p_bar.progress(processed / total if total > 0 else 0)
+                
+            success = kite_scanner.run_unified_morning_cache(kite, progress_callback=cb)
+            p_bar.empty()
+            if success:
+                st.toast("🟢 Unified Caching Complete!", icon="🟢")
+                st.rerun()
+            else:
+                st.sidebar.error("❌ Unified Caching failed. Check logs.")
+                
         if st.sidebar.button("🚀 Run Sequential Cache", width="stretch"):
             kite = KiteConnect(api_key=api_key)
             kite.set_access_token(st.session_state.kite_access_token)
@@ -2757,6 +2774,14 @@ if active_tab == "🔍 Scanners":
                         st.error(f"Failed to run Bullish VWAP Rejection: {e}")
                         results_df = pd.DataFrame()
                 else:
+                    kite = None
+                    if st.session_state.get("kite_logged_in") and st.session_state.get("kite_access_token"):
+                        try:
+                            kite = KiteConnect(api_key=api_key)
+                            kite.set_access_token(st.session_state.kite_access_token)
+                        except Exception:
+                            pass
+
                     tickers = scanner.get_nifty500_fno_tickers()
 
                     def update_yf_progress(processed, total, symbol):
@@ -2765,9 +2790,9 @@ if active_tab == "🔍 Scanners":
                         status_text.text(f"Processing: {symbol} ({processed}/{total})")
 
                     if strategy == "Swing Trade Candidates":
-                        results_df = swing_scanner.scan_swing_candidates(tickers, progress_callback=update_yf_progress)
+                        results_df = swing_scanner.scan_swing_candidates(tickers, progress_callback=update_yf_progress, kite=kite)
                     else:
-                        results_df = swing_scanner.scan_breakout_stocks(tickers, progress_callback=update_yf_progress)
+                        results_df = swing_scanner.scan_breakout_stocks(tickers, progress_callback=update_yf_progress, kite=kite)
 
                 progress_bar.progress(100)
                 status_text.text("Scan complete!")

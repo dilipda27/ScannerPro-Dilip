@@ -5,38 +5,16 @@ import os
 import yfinance as yf
 import logging
 from kiteconnect import KiteConnect
-from requests.adapters import HTTPAdapter
-
-# Global patch to increase requests connection pool size for multi-threading stability
-_original_kite_init = KiteConnect.__init__
-def _patched_kite_init(self, *args, **kwargs):
-    _original_kite_init(self, *args, **kwargs)
-    self.timeout = 15
-    if hasattr(self, "reqsession"):
-        adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100)
-        self.reqsession.mount("https://", adapter)
-        self.reqsession.mount("http://", adapter)
-KiteConnect.__init__ = _patched_kite_init
+import core.kite_patch  # noqa: F401 — applies KiteConnect connection pool patch
 
 from core import config
+from core.market_context import is_nifty_bearish
 import concurrent.futures
 from services import paper_trader
 
 BEARISH_CACHE_FILE = os.path.join("data", "cache", "bearish_breakdown_cache.csv")
 
-def calculate_vwap(df):
-    """Calculate cumulative intraday VWAP resetting daily."""
-    df_calc = df.copy()
-    tp = (df_calc['high'] + df_calc['low'] + df_calc['close']) / 3
-    tpv = tp * df_calc['volume']
-    
-    # Intraday VWAP (groups by date to reset calculations at the start of each session)
-    dates = df_calc.index.date
-    df_calc['tpv'] = tpv
-    df_calc['cum_tpv'] = df_calc.groupby(dates)['tpv'].cumsum()
-    df_calc['cum_vol'] = df_calc.groupby(dates)['volume'].cumsum()
-    df_calc['vwap'] = df_calc['cum_tpv'] / df_calc['cum_vol']
-    return df_calc['vwap']
+from utils.indicators import calculate_vwap_cumulative as calculate_vwap  # cumulative: returns Series
 
 def calculate_ema(series, span=9):
     """Calculate Exponential Moving Average."""
@@ -192,7 +170,7 @@ def fetch_stock_data(ticker, token, pdc, use_demo=False, kite=None):
         
     return generate_synthetic_bearish_setup(ticker, pdc)
 
-def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None, nifty_bullish=False):
+def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None, nifty_bearish=False):
     """Scans intraday data for Bearish VWAP Rejection signals with strict structural & safety filters."""
     if df.empty or len(df) < 21:
         return df, []
@@ -217,6 +195,18 @@ def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None
     df_session['vol_ma20'] = df_session['volume'].rolling(window=20).mean()
     df_session['rsi_5m'] = calculate_rsi(df_session['close'], period=14)
     
+    # Calculate ADX to measure trend strength
+    try:
+        import pandas_ta as ta
+        adx_df = df_session.ta.adx(length=14)
+        if adx_df is not None and not adx_df.empty:
+            df_session['adx_5m'] = adx_df['ADX_14']
+        else:
+            df_session['adx_5m'] = 25.0
+    except Exception as e:
+        logging.warning(f"ADX calculation failed: {e}")
+        df_session['adx_5m'] = 25.0
+    
     # Calculate 5-minute ATR for dynamic rejection band
     high_low = df_session['high'] - df_session['low']
     high_prev_close = (df_session['high'] - df_session['close'].shift(1)).abs()
@@ -233,10 +223,12 @@ def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None
     
     # 4. Strategy Rule: Trend Conditions
     df_session['vwap_sloping_down'] = (df_session['vwap'] < df_session['vwap'].shift(3)).fillna(True)
+    df_session['ema_20_sloping_down'] = (df_session['ema_20'] < df_session['ema_20'].shift(3)).fillna(True)
     
     df_session['trend_ok'] = (df_session['close'] < df_session['vwap']) & \
                              (df_session['vwap'] < pdc) & \
                              (df_session['vwap_sloping_down']) & \
+                             (df_session['ema_20_sloping_down']) & \
                              (df_session['close'] < df_session['ema_20']) & \
                              (df_session['ema_9'] < df_session['ema_20'])
     
@@ -256,8 +248,8 @@ def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None
     v_pullback = (df_session['high'] >= df_session['vwap'] - atr_buffer) & \
                  (df_session['low'] <= df_session['vwap'] + atr_buffer)
                  
-    e_pullback = (df_session['high'] >= df_session['ema_9'] - atr_buffer) & \
-                 (df_session['low'] <= df_session['ema_9'] + atr_buffer)
+    e_pullback = (df_session['high'] >= df_session['ema_20'] - atr_buffer) & \
+                 (df_session['low'] <= df_session['ema_20'] + atr_buffer)
                  
     df_session['pullback_touches'] = v_pullback | e_pullback
     
@@ -270,7 +262,7 @@ def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None
     df_session['not_extended'] = df_session['day_change_pct'] > -3.0
     
     df_session['vwap_dist_pct'] = ((df_session['vwap'] - df_session['close']) / df_session['vwap'] * 100).abs()
-    df_session['ema_dist_pct'] = ((df_session['ema_9'] - df_session['close']) / df_session['ema_9'] * 100).abs()
+    df_session['ema_dist_pct'] = ((df_session['ema_20'] - df_session['close']) / df_session['ema_20'] * 100).abs()
     df_session['min_dist_pct'] = df_session[['vwap_dist_pct', 'ema_dist_pct']].min(axis=1)
     df_session['not_chasing'] = df_session['min_dist_pct'] <= 0.4
     
@@ -280,8 +272,17 @@ def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None
     # Volume Filter: Rejection candle volume must confirm institutional activity
     df_session['vol_ok'] = df_session['volume'] > df_session['vol_ma20'] * 1.2
     
-    # Broad market Nifty filter
-    df_session['nifty_ok'] = not nifty_bullish
+    # Broad market Nifty filter (strictly requires confirmed BEARISH trend today)
+    df_session['nifty_ok'] = nifty_bearish
+    
+    # Trend strength filter (strictly requires ADX >= 20)
+    df_session['adx_ok'] = df_session['adx_5m'] >= 20
+    
+    # Color check: Trigger candle must be RED (momentum confirmation)
+    df_session['candle_is_red'] = df_session['close'] < df_session['open']
+    
+    # Pullback volume check: Prior candle volume must not represent a distribution volume spike
+    df_session['pullback_vol_ok'] = (df_session['volume'].shift(1) < df_session['vol_ma20'].shift(1) * 1.5).fillna(True)
     
     df_session['trigger_signal'] = (
         df_session['trend_ok'] & 
@@ -294,6 +295,9 @@ def run_rejection_scanner(df, pdc, pullback_threshold=0.0015, yesterday_low=None
         df_session['not_extended'] &
         df_session['not_chasing'] &
         df_session['candle_ok'] &
+        df_session['candle_is_red'] &
+        df_session['pullback_vol_ok'] &
+        df_session['adx_ok'] &
         df_session['nifty_ok']
     )
     
@@ -405,7 +409,7 @@ def batch_pre_screen(cache_df, kite=None):
         logging.warning(f"Batch pre-screen failed: {e}. Falling back to full list.")
         return cache_df
 
-def scan_all_tickers_parallel(active_df, pullback_threshold, progress_callback=None, use_demo=False, kite=None, nifty_bullish=False):
+def scan_all_tickers_parallel(active_df, pullback_threshold, progress_callback=None, use_demo=False, kite=None, nifty_bearish=False):
     """Runs technical scans in parallel using ThreadPoolExecutor."""
     triggered_setups = []
     monitored_setups = []
@@ -425,7 +429,7 @@ def scan_all_tickers_parallel(active_df, pullback_threshold, progress_callback=N
             if df_raw.empty:
                 return None
                 
-            df_analyzed, alerts = run_rejection_scanner(df_raw, pdc, pullback_threshold, yesterday_low=yesterday_low, nifty_bullish=nifty_bullish)
+            df_analyzed, alerts = run_rejection_scanner(df_raw, pdc, pullback_threshold, yesterday_low=yesterday_low, nifty_bearish=nifty_bearish)
             
             latest_price = df_analyzed['close'].iloc[-1] if not df_analyzed.empty else pdc
             vwap = df_analyzed['vwap'].iloc[-1] if not df_analyzed.empty else pdc
@@ -489,26 +493,7 @@ def scan_all_tickers_parallel(active_df, pullback_threshold, progress_callback=N
 
 def scan_bearish_vwap_rejections(kite, pullback_threshold=0.0015, use_demo=False):
     """Programmatic entry point to run the bearish VWAP rejection scan."""
-    nifty_bullish = False
-    try:
-        if not use_demo and kite:
-            from strategies import kite_scanner
-            nifty_token_map = kite_scanner.get_kite_instruments(kite, ["NIFTY 50"])
-            if nifty_token_map and "NIFTY 50" in nifty_token_map:
-                nifty_token = nifty_token_map["NIFTY 50"]
-                to_date = datetime.datetime.now()
-                nifty_from = to_date.replace(hour=9, minute=15, second=0, microsecond=0)
-                if nifty_from > to_date:
-                    nifty_from = nifty_from - datetime.timedelta(days=1)
-                nifty_df = kite_scanner.fetch_kite_data(kite, nifty_token, nifty_from, to_date, "5minute")
-                if not nifty_df.empty:
-                    nifty_open = nifty_df.iloc[0]['open']
-                    nifty_ltp = nifty_df.iloc[-1]['close']
-                    nifty_change_pct = (nifty_ltp - nifty_open) / nifty_open
-                    nifty_bullish = nifty_change_pct > 0.0010
-                    logging.info(f"Broad Market Check -> Nifty Open: {nifty_open:.2f}, LTP: {nifty_ltp:.2f} | Change %: {nifty_change_pct*100:.3f}% | Bullish? {nifty_bullish}")
-    except Exception as ne:
-        logging.warning(f"Failed to fetch Nifty 50 trend: {ne}")
+    nifty_bearish = is_nifty_bearish(kite) if (not use_demo and kite) else False
 
     universe_df = load_universe_data()
     active_candidates = batch_pre_screen(universe_df, kite=kite)
@@ -516,7 +501,7 @@ def scan_bearish_vwap_rejections(kite, pullback_threshold=0.0015, use_demo=False
         return pd.DataFrame(), pd.DataFrame()
         
     triggered_df, monitored_df = scan_all_tickers_parallel(
-        active_candidates, pullback_threshold, progress_callback=None, use_demo=use_demo, kite=kite, nifty_bullish=nifty_bullish
+        active_candidates, pullback_threshold, progress_callback=None, use_demo=use_demo, kite=kite, nifty_bearish=nifty_bearish
     )
     return triggered_df, monitored_df
 

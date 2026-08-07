@@ -7,7 +7,10 @@ from kiteconnect import KiteConnect
 from core import config
 from services import paper_trader
 
-import bearish_vwap_rejection as logic
+try:
+    from strategies import bearish_vwap_rejection as logic
+except ImportError:
+    import bearish_vwap_rejection as logic
 
 # Re-expose functions that app.py or local execution expects to import directly
 calculate_vwap = logic.calculate_vwap
